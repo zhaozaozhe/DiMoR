@@ -42,13 +42,9 @@ def run_model(task=None, model_name=None, dataset_name=None, config_file=None,
         exp_id, model_name, dataset_name)
     model = get_model(config, data_feature)
 
-    if torch.cuda.device_count() > 1:
-        print(f'Using {torch.cuda.device_count()} GPUs')
-        model = torch.nn.DataParallel(model, device_ids=[2, 3])
-        model = model.to('cuda:2')
-    else:
-        model = model.to('cuda:2' if torch.cuda.is_available() else 'cpu')
-
+    # Use the device resolved by LibCity ConfigParser instead of hard-coded CUDA ordinals.
+    # This keeps local single-GPU runs compatible with --gpu_id 0 / CUDA_VISIBLE_DEVICES=0.
+    model = model.to(config.get('device'))
 
     executor = get_executor(config, model)
     if train or not os.path.exists(model_cache_file):  # true

@@ -16,3 +16,9 @@ references/
 
 # Local environment snapshots
 env_ai_lab_before_codex.yml
+
+# Local experiment outputs
+experiments/logs/
+libcity/cache/*/model_cache/
+libcity/cache/*/evaluate_cache/
+libcity/cache/*/result_cache/

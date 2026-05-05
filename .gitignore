@@ -22,3 +22,7 @@ experiments/logs/
 libcity/cache/*/model_cache/
 libcity/cache/*/evaluate_cache/
 libcity/cache/*/result_cache/
+
+# Local LibCity run outputs
+libcity/cache/[0-9]*/
+libcity/log/*.log

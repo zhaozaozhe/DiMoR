@@ -334,6 +334,55 @@ def norm_embedding(adj):
     b.scatter_(1, indices, 1.0)
     return b
 
+
+class MovingAvg(nn.Module):
+    def __init__(self, kernel_size, stride):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.avg = nn.AvgPool1d(kernel_size=kernel_size, stride=stride, padding=0)
+
+    def forward(self, x):
+        B, T, N, D = x.shape
+        x = x.permute(0, 2, 3, 1).reshape(-1, 1, T)
+        front = x[:, :, 0:1].repeat(1, 1, self.kernel_size - 1)
+        x_padded = torch.cat([front, x], dim=-1)
+        x = self.avg(x_padded)
+        x = x.reshape(B, N, D, T).permute(0, 3, 1, 2)
+        return x
+
+
+class SeriesDecomposition(nn.Module):
+    def __init__(self, kernel_size):
+        super().__init__()
+        self.moving_avg = MovingAvg(kernel_size, stride=1)
+
+    def forward(self, x):
+        moving_mean = self.moving_avg(x)
+        res = x - moving_mean
+        return res, moving_mean
+
+
+class DeepTrendNet(nn.Module):
+    def __init__(self, input_dim, input_window, output_window, hidden_dim=64):
+        super().__init__()
+        self.feature_proj = nn.Linear(input_dim, 1)
+        self.mlp1 = nn.Linear(input_window, hidden_dim)
+        self.mlp2 = nn.Linear(hidden_dim, hidden_dim)
+        self.mlp3 = nn.Linear(hidden_dim, output_window)
+        self.act = nn.GELU()
+        self.dropout = nn.Dropout(0.1)
+        nn.init.zeros_(self.mlp3.weight)
+        nn.init.zeros_(self.mlp3.bias)
+
+    def forward(self, x):
+        x_val = self.feature_proj(x)
+        x_val = x_val.permute(0, 2, 3, 1)
+        h1 = self.act(self.mlp1(x_val))
+        h2 = self.act(self.mlp2(self.dropout(h1))) + h1
+        out = self.mlp3(h2)
+        return out.permute(0, 3, 1, 2)
+
+
 class DGSTA(AbstractTrafficStateModel):
     def __init__(self, config, data_feature):
         super().__init__(config, data_feature)
@@ -445,6 +494,13 @@ class DGSTA(AbstractTrafficStateModel):
         tempp = norm_embedding(tempp)
         self.tempp = self.cal_lape_emb(tempp).to(self.device)
 
+        self.use_deep_trend = config.get('use_deep_trend', False)
+        if self.use_deep_trend:
+            feat_dim = self.feature_dim - self.ext_dim
+            self.input_decomp = SeriesDecomposition(kernel_size=5)
+            self.deep_trend_net = DeepTrendNet(feat_dim, self.input_window, self.output_window)
+            self.trend_fusion = nn.Parameter(torch.tensor(0.1))
+
 
     def cal_lape_emb(self, adj):
         adj = sp.coo_matrix(adj)
@@ -475,7 +531,16 @@ class DGSTA(AbstractTrafficStateModel):
 
         skip = self.end_conv1(F.relu(skip.permute(0, 3, 2, 1)))
         skip = self.end_conv2(F.relu(skip.permute(0, 3, 2, 1)))
-        return skip.permute(0, 3, 2, 1)
+        main_pred = skip.permute(0, 3, 2, 1)
+
+        if self.use_deep_trend:
+            feat_dim = self.feature_dim - self.ext_dim
+            x_flow = x[..., :feat_dim]
+            _, x_trend = self.input_decomp(x_flow)
+            trend_pred = self.deep_trend_net(x_trend)
+            return main_pred + self.trend_fusion * trend_pred
+        else:
+            return main_pred
 
     # 选择损失函数
     def get_loss_func(self, set_loss):

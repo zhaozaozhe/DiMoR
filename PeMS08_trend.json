@@ -7,8 +7,8 @@
     "batch_size": 32,
     "add_time_in_day": true,
     "add_day_in_week": true,
-    "step_size": 2776,
-    "max_epoch": 300,
+    "step_size": 500,
+    "max_epoch": 50,
     "bidir": true,
     "far_mask_delta": 7,
     "geo_num_heads": 4,
@@ -21,5 +21,6 @@
     "set_loss": "huber",
     "huber_delta": 2,
     "mode": "average",
-    "use_deep_trend": false
+    "use_deep_trend": true,
+    "patience": 15
 }

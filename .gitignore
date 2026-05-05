@@ -1,0 +1,18 @@
+
+# Local Python cache
+__pycache__/
+*.py[cod]
+
+# Local datasets and generated cache
+raw_data/
+data/
+libcity/cache/dataset_cache/*.npz
+libcity/cache/*/model_cache/
+libcity/cache/*/evaluate_cache/
+libcity/cache/*/result_cache/
+
+# Local reference files copied from old experiments
+references/
+
+# Local environment snapshots
+env_ai_lab_before_codex.yml

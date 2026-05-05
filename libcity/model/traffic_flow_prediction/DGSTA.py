@@ -1,4 +1,5 @@
 import math
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -435,7 +436,11 @@ class DGSTA(AbstractTrafficStateModel):
             in_channels=self.skip_dim, out_channels=self.output_dim, kernel_size=1, bias=True,
         )
 
-        tempp = np.load("/libcity/cache/dataset_cache/" + self.dataset + "/tempp.npy")
+        tempp_path = os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "cache", "dataset_cache", self.dataset, "tempp.npy"
+        )
+        tempp = np.load(tempp_path)
         tempp = torch.from_numpy(tempp).to(torch.float32)
         tempp = norm_embedding(tempp)
         self.tempp = self.cal_lape_emb(tempp).to(self.device)

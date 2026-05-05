@@ -17,7 +17,8 @@ class DGSTAExecutor(TrafficStateExecutor):
         self.lr_warmup_epoch = config.get("lr_warmup_epoch", 5)
         self.lr_warmup_init = config.get("lr_warmup_init", 1e-6)
         self.lape_dim = config.get('lape_dim', 200)  # 8
-        self.adj_mx = model.module.get_data_feature().get('adj_mx')
+        base_model = model.module if hasattr(model, "module") else model
+        self.adj_mx = base_model.get_data_feature().get('adj_mx')
         super().__init__(config, model)
         self.lap_mx = self._cal_lape(self.adj_mx).to(self.device)
         self.random_flip = config.get('random_flip', True)
@@ -219,7 +220,7 @@ class DGSTAExecutor(TrafficStateExecutor):
         self.model.train()
         if loss_func is None:
             if self.distributed:  # false
-                loss_func = self.model.module.calculate_loss_without_predict
+                loss_func = self.model.calculate_loss_without_predict
             else:
                 loss_func = self.model.calculate_loss_without_predict
         losses = []
@@ -257,7 +258,7 @@ class DGSTAExecutor(TrafficStateExecutor):
             self.model.eval()
             if loss_func is None:
                 if self.distributed:
-                    loss_func = self.model.module.calculate_loss_without_predict
+                    loss_func = self.model.calculate_loss_without_predict
                 else:
                     loss_func = self.model.calculate_loss_without_predict
             losses = []

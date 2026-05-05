@@ -23,7 +23,7 @@ class TrafficStateExecutor(AbstractExecutor):
         self.evaluator = get_evaluator(config)
         self.config = config
         self.device = self.config.get('device', torch.device('cpu'))
-        self.model = model.module.to(self.device)
+        self.model = (model.module if hasattr(model, "module") else model).to(self.device)
         self.exp_id = self.config.get('exp_id', None)
 
         self.cache_dir = './libcity/cache/{}/model_cache'.format(self.exp_id)
@@ -203,7 +203,7 @@ class TrafficStateExecutor(AbstractExecutor):
     # 选择训练损失函数
     def _build_train_loss(self):
         if self.train_loss.lower() == 'none':  # true
-            self._logger.warning('Received none train loss func and will use the loss func defined in the model.module.')
+            self._logger.warning('Received none train loss func and will use the loss func defined in the model.')
             return None
         if self.train_loss.lower() not in ['mae', 'mse', 'rmse', 'mape', 'logcosh', 'huber', 'quantile', 'masked_mae',
                                            'masked_mse', 'masked_rmse', 'masked_mape', 'r2', 'evar']:

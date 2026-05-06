@@ -189,13 +189,17 @@ class STSelfAttention(nn.Module):
         self.geo_v_conv = nn.Conv2d(dim, int(dim * self.geo_ratio), kernel_size=1, bias=qkv_bias)
         self.geo_attn_drop = nn.Dropout(attn_drop)
 
+        self.sem_q_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
+        self.sem_k_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
+        self.sem_v_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
+        self.sem_attn_drop = nn.Dropout(attn_drop)
 
         self.t_q_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_k_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_v_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_attn_drop = nn.Dropout(attn_drop)
 
-        self.proj = nn.Linear(int(dim * 3 / 4), dim)
+        self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
         # 多图
@@ -224,7 +228,7 @@ class STSelfAttention(nn.Module):
         return adp
         
 
-    def forward(self, x, ind, geo_mask=None):
+    def forward(self, x, ind, geo_mask=None, sem_mask=None):
         B, T, N, D = x.shape
 
         ind %= self.days
@@ -266,8 +270,20 @@ class STSelfAttention(nn.Module):
         geo_attn = self.geo_attn_drop(geo_attn)
         geo_x = (geo_attn @ geo_v).transpose(2, 3).reshape(B, T, N, int(D * self.geo_ratio))
 
+        sem_q = self.sem_q_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+        sem_k = self.sem_k_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+        sem_v = self.sem_v_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+        sem_q = sem_q.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
+        sem_k = sem_k.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
+        sem_v = sem_v.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
+        sem_attn = (sem_q @ sem_k.transpose(-2, -1)) * self.scale
+        if sem_mask is not None:
+            sem_attn.masked_fill_(sem_mask, float('-inf'))
+        sem_attn = sem_attn.softmax(dim=-1)
+        sem_attn = self.sem_attn_drop(sem_attn)
+        sem_x = (sem_attn @ sem_v).transpose(2, 3).reshape(B, T, N, int(D * self.sem_ratio))
 
-        x = self.proj(torch.cat([t_x, geo_x], dim=-1))
+        x = self.proj(torch.cat([t_x, geo_x, sem_x], dim=-1))
         x = self.proj_drop(x)
         return x
 
@@ -312,14 +328,14 @@ class STEncoderBlock(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, ind, geo_mask=None):
+    def forward(self, x, ind, geo_mask=None, sem_mask=None):
         if self.type_ln == 'pre':  # ture
             x = x + self.drop_path(
-                self.st_attn(self.norm1(x), ind, geo_mask=geo_mask))
+                self.st_attn(self.norm1(x), ind, geo_mask=geo_mask, sem_mask=sem_mask))
             x = x + self.drop_path(self.mlp(self.norm2(x)))
         elif self.type_ln == 'post':
             x = self.norm1(
-                x + self.drop_path(self.st_attn(x, geo_mask=geo_mask)))
+                x + self.drop_path(self.st_attn(x, ind, geo_mask=geo_mask, sem_mask=sem_mask)))
             x = self.norm2(x + self.drop_path(self.mlp(x)))
         return x
 
@@ -453,6 +469,9 @@ class DGSTA(AbstractTrafficStateModel):
             self.geo_mask[sh_mx >= self.far_mask_delta] = 1
             self.geo_mask = self.geo_mask.bool()
 
+        self.sem_mask = torch.zeros(self.num_nodes, self.num_nodes).to(self.device)
+        self.sem_mask[self.dtw_matrix >= self.dtw_delta] = 1
+        self.sem_mask = self.sem_mask.bool()
 
         self.enc_embed_layer = DataEmbedding(
             self.feature_dim - self.ext_dim, self.embed_dim, lape_dim, self.adj_mx, drop=drop,
@@ -526,7 +545,7 @@ class DGSTA(AbstractTrafficStateModel):
         enc = self.enc_embed_layer(x, lap_mx, tempp)
         skip = 0
         for i, encoder_block in enumerate(self.encoder_blocks):
-            enc = encoder_block(enc, ind, self.geo_mask)
+            enc = encoder_block(enc, ind, self.geo_mask, self.sem_mask)
             skip += self.skip_convs[i](enc.permute(0, 3, 2, 1))
 
         skip = self.end_conv1(F.relu(skip.permute(0, 3, 2, 1)))

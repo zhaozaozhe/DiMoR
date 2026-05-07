@@ -122,6 +122,48 @@ class Chomp2d(nn.Module):
         return x[:, :, :x.shape[2] - self.chomp_size, :].contiguous()
 
 
+class DelayConv(nn.Module):
+    def __init__(self, channels, kernel_size=3):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.delay_conv = nn.Conv2d(channels, channels, kernel_size=(kernel_size, 1),
+                                    padding=(0, 0), groups=channels)
+        nn.init.dirac_(self.delay_conv.weight)
+
+    def forward(self, x):
+        x = x.permute(0, 3, 1, 2)
+        x = F.pad(x, (0, 0, self.kernel_size - 1, 0))
+        x = self.delay_conv(x)
+        return x.permute(0, 2, 3, 1)
+
+
+class MovingAvg(nn.Module):
+    def __init__(self, kernel_size, stride):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.avg = nn.AvgPool1d(kernel_size=kernel_size, stride=stride, padding=0)
+
+    def forward(self, x):
+        B, T, N, D = x.shape
+        x = x.permute(0, 2, 3, 1).reshape(-1, 1, T)
+        front = x[:, :, 0:1].repeat(1, 1, self.kernel_size - 1)
+        x_padded = torch.cat([front, x], dim=-1)
+        x = self.avg(x_padded)
+        x = x.reshape(B, N, D, T).permute(0, 3, 1, 2)
+        return x
+
+
+class SeriesDecomposition(nn.Module):
+    def __init__(self, kernel_size):
+        super().__init__()
+        self.moving_avg = MovingAvg(kernel_size, stride=1)
+
+    def forward(self, x):
+        moving_mean = self.moving_avg(x)
+        res = x - moving_mean
+        return res, moving_mean
+
+
 class nconv(nn.Module):
     def __init__(self):
         super(nconv, self).__init__()
@@ -141,18 +183,30 @@ class linear(nn.Module):
 
 
 class gcn(nn.Module):
-    def __init__(self, c_in, c_out, dropout, support_len=3, order=2):
+    def __init__(self, c_in, c_out, dropout, support_len=3, order=2, use_delay_conv=False):
         super(gcn, self).__init__()
         self.nconv = nconv()
+        c_in_original = c_in
         c_in = (order * support_len + 1) * c_in
         self.mlp = linear(c_in, c_out)
         self.dropout = dropout
         self.order = order
+        self.use_delay_conv = use_delay_conv
+        if self.use_delay_conv:
+            self.delay_conv = DelayConv(c_in_original, kernel_size=3)
+            self.out_proj = nn.Conv2d(c_out, c_out, kernel_size=1)
 
     def forward(self, x, support):
-        out = [x]
+        if self.use_delay_conv:
+            x_perm = x.permute(0, 3, 2, 1)
+            x_delay = self.delay_conv(x_perm)
+            x_delay = x_delay.permute(0, 3, 2, 1)
+            out = [x_delay]
+        else:
+            out = [x]
         for a in support:
-            x1 = self.nconv(x, a)
+            base = out[0]
+            x1 = self.nconv(base, a)
             out.append(x1)
             for k in range(2, self.order + 1):
                 x2 = self.nconv(x1, a)
@@ -162,62 +216,132 @@ class gcn(nn.Module):
         h = torch.cat(out, dim=1)
         h = self.mlp(h)
         h = F.dropout(h, self.dropout, training=self.training)
+        if self.use_delay_conv:
+            h = self.out_proj(h)
         return h
+
+
+class SpatialPatternRouter(nn.Module):
+    def __init__(self, num_nodes, num_graphs=10, input_dim=64, temperature=1.0, adj_init=None, embed_dim=10):
+        super().__init__()
+        self.num_nodes = num_nodes
+        self.temperature = temperature
+
+        self.graph_codebook = nn.Parameter(torch.randn(num_graphs, num_nodes, num_nodes) * 1e-4)
+
+        if adj_init is not None:
+            if isinstance(adj_init, np.ndarray):
+                adj_init = torch.from_numpy(adj_init).float()
+            if adj_init.max() > 1:
+                adj_init = adj_init / (adj_init.max() + 1e-5)
+            with torch.no_grad():
+                if adj_init.dim() == 2 and adj_init.shape[0] == num_nodes:
+                    self.graph_codebook[0].copy_(adj_init)
+
+        self.reduce_dim = nn.Linear(input_dim, 1)
+        self.spatial_compressor = nn.Sequential(
+            nn.Linear(num_nodes, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32)
+        )
+        self.classifier = nn.Linear(32, num_graphs)
+
+        self.nodevec1 = nn.Parameter(torch.randn(num_nodes, embed_dim).to(torch.float32), requires_grad=True)
+        self.nodevec2 = nn.Parameter(torch.randn(embed_dim, num_nodes).to(torch.float32), requires_grad=True)
+        nn.init.xavier_normal_(self.nodevec1)
+        nn.init.xavier_normal_(self.nodevec2)
+
+        self.consistency_loss = 0.0
+
+    def forward(self, x_trend, training=True):
+        traffic_intensity = self.reduce_dim(x_trend).squeeze(-1)
+        pattern_emb = self.spatial_compressor(traffic_intensity)
+        logits = self.classifier(pattern_emb)
+
+        if training:
+            diff = logits[:, 1:, :] - logits[:, :-1, :]
+            self.consistency_loss = torch.mean(diff ** 2)
+        else:
+            self.consistency_loss = 0.0
+
+        weights = F.gumbel_softmax(logits, tau=self.temperature, hard=True, dim=-1)
+        adj_vq = torch.einsum('btk, knm -> btnm', weights, self.graph_codebook)
+        adj_vq = F.relu(adj_vq)
+
+        adj_adp = F.relu(torch.mm(self.nodevec1, self.nodevec2))
+
+        return adj_vq, adj_adp, weights
+
 
 class STSelfAttention(nn.Module):
     def __init__(
             self, dim, s_attn_size, t_attn_size, geo_num_heads=4, sem_num_heads=2, t_num_heads=2, qkv_bias=False,
-            attn_drop=0., proj_drop=0., device=torch.device('cpu'), output_dim=1, num_nodes=170
+            attn_drop=0., proj_drop=0., device=torch.device('cpu'), output_dim=1, num_nodes=170,
+            use_vq_router=False, use_delay_conv=False, adj_init=None
     ):
         super().__init__()
         assert dim % (geo_num_heads + sem_num_heads + t_num_heads) == 0
-        self.geo_num_heads = geo_num_heads  # 4
-        self.sem_num_heads = sem_num_heads  # 2
-        self.t_num_heads = t_num_heads  # 2
-        self.head_dim = dim // (geo_num_heads + sem_num_heads + t_num_heads)  # 8
+        self.geo_num_heads = geo_num_heads
+        self.sem_num_heads = sem_num_heads
+        self.t_num_heads = t_num_heads
+        self.head_dim = dim // (geo_num_heads + sem_num_heads + t_num_heads)
         self.scale = self.head_dim ** -0.5
         self.device = device
         self.s_attn_size = s_attn_size
         self.t_attn_size = t_attn_size
-        self.geo_ratio = geo_num_heads / (geo_num_heads + sem_num_heads + t_num_heads)  # 0.5
-        self.sem_ratio = sem_num_heads / (geo_num_heads + sem_num_heads + t_num_heads)  # 0.25
-        self.t_ratio = 1 - self.geo_ratio - self.sem_ratio  # 0.25
+        self.geo_ratio = geo_num_heads / (geo_num_heads + sem_num_heads + t_num_heads)
+        self.sem_ratio = sem_num_heads / (geo_num_heads + sem_num_heads + t_num_heads)
+        self.t_ratio = 1 - self.geo_ratio - self.sem_ratio
         self.output_dim = output_dim
+        self.use_vq_router = use_vq_router
 
         self.geo_q_conv = nn.Conv2d(dim, int(dim * self.geo_ratio), kernel_size=1, bias=qkv_bias)
         self.geo_k_conv = nn.Conv2d(dim, int(dim * self.geo_ratio), kernel_size=1, bias=qkv_bias)
         self.geo_v_conv = nn.Conv2d(dim, int(dim * self.geo_ratio), kernel_size=1, bias=qkv_bias)
         self.geo_attn_drop = nn.Dropout(attn_drop)
 
-        self.sem_q_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
-        self.sem_k_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
-        self.sem_v_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
-        self.sem_attn_drop = nn.Dropout(attn_drop)
+        if not self.use_vq_router:
+            self.sem_q_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
+            self.sem_k_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
+            self.sem_v_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
+            self.sem_attn_drop = nn.Dropout(attn_drop)
 
         self.t_q_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_k_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_v_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_attn_drop = nn.Dropout(attn_drop)
 
-        self.proj = nn.Linear(dim, dim)
+        if self.use_vq_router:
+            self.proj = nn.Linear(int(dim * 3 / 4), dim)
+        else:
+            self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
-
-        # 多图
-        self.gconv = nn.ModuleList()
-        self.days = 288
-        dims = 40
-        self.supports_len = 1
-        torch.cuda.manual_seed_all(1)
-        self.nodevec_p1 = nn.Parameter(torch.randn(self.days, dims).to(device), requires_grad=True).to(device)
-        self.nodevec_p2 = nn.Parameter(torch.randn(num_nodes, dims).to(device), requires_grad=True).to(device)
-        self.nodevec_p3 = nn.Parameter(torch.randn(num_nodes, dims).to(device), requires_grad=True).to(device)
-        self.nodevec_pk = nn.Parameter(torch.randn(dims, dims, dims).to(device), requires_grad=True).to(device)
-        
-
-        self.gconv = gcn(32, 32, 0.3, support_len=self.supports_len, order=2)
 
         self.reshape1 = nn.Linear(dim, 32)
         self.reshape2 = nn.Linear(32, dim)
+
+        if self.use_vq_router:
+            self.series_decomp = SeriesDecomposition(kernel_size=5)
+            self.num_graphs = 10
+            self.vq_router = SpatialPatternRouter(num_nodes, self.num_graphs, input_dim=dim,
+                                                  temperature=1.0, adj_init=adj_init).to(device)
+            self.layer_norm = nn.LayerNorm(dim)
+            self.res_scale = nn.Parameter(torch.ones(1) * 0.1)
+            self.top_k = 20
+            self.adj_temperature = 0.5
+            support_len = 2
+        else:
+            self.days = 288
+            dims = 40
+            self.supports_len = 1
+            torch.cuda.manual_seed_all(1)
+            self.nodevec_p1 = nn.Parameter(torch.randn(self.days, dims).to(device), requires_grad=True).to(device)
+            self.nodevec_p2 = nn.Parameter(torch.randn(num_nodes, dims).to(device), requires_grad=True).to(device)
+            self.nodevec_p3 = nn.Parameter(torch.randn(num_nodes, dims).to(device), requires_grad=True).to(device)
+            self.nodevec_pk = nn.Parameter(torch.randn(dims, dims, dims).to(device), requires_grad=True).to(device)
+            support_len = 1
+
+        self.gconv = gcn(32, 32, 0.3, support_len=support_len, order=2, use_delay_conv=use_delay_conv)
 
     def dgconstruct(self, time_embedding, source_embedding, target_embedding, core_embedding):
         adp = torch.einsum('ai, ijk->ajk', time_embedding, core_embedding)
@@ -226,25 +350,57 @@ class STSelfAttention(nn.Module):
         adp = F.relu(adp)
         adp = F.softmax(adp, dim=2)
         return adp
-        
+
+    def sparsify_graph(self, adj):
+        adj = adj / self.adj_temperature
+        if self.top_k < adj.shape[-1]:
+            mask = torch.zeros_like(adj)
+            topk_val, topk_idx = torch.topk(adj, k=self.top_k, dim=-1)
+            mask.scatter_(-1, topk_idx, 1.0)
+            adj = adj.masked_fill(mask == 0, -1e9)
+        return F.softmax(adj, dim=-1)
 
     def forward(self, x, ind, geo_mask=None, sem_mask=None):
         B, T, N, D = x.shape
 
-        ind %= self.days
-        ind = ind.cpu().numpy()
-        adp = self.dgconstruct(self.nodevec_p1[ind], self.nodevec_p2, self.nodevec_p3, self.nodevec_pk)
-        new_supports = [adp]
+        if self.use_vq_router:
+            x_res, x_trend = self.series_decomp(x)
 
-        x = x.reshape(-1, D)
-        x = self.reshape1(x)
-        x = x.reshape(B, T, N, 32)
-        x = x.permute(0, 3, 2, 1)
-        x = self.gconv(x, new_supports)
-        x = x.permute(0, 3, 2, 1)
-        x = x.reshape(-1, 32)
-        x = self.reshape2(x)
-        x = x.reshape(B, T, N, D)
+            raw_vq, raw_adp, weights = self.vq_router(x_trend, training=self.training)
+            adj_vq = self.sparsify_graph(raw_vq)
+            adj_adp = self.sparsify_graph(raw_adp)
+            new_supports = [adj_vq, adj_adp]
+
+            x_gcn_in = x_res.reshape(-1, D)
+            x_gcn_in = self.reshape1(x_gcn_in)
+            x_gcn_in = x_gcn_in.reshape(B, T, N, 32)
+            x_gcn_in = x_gcn_in.permute(0, 3, 2, 1)
+
+            x_gcn_out = self.gconv(x_gcn_in, new_supports)
+
+            x_gcn_out = x_gcn_out.permute(0, 3, 2, 1)
+            x_gcn_out = x_gcn_out.reshape(-1, 32)
+            x_gcn_out = self.reshape2(x_gcn_out)
+            x_gcn_out = x_gcn_out.reshape(B, T, N, D)
+            x_gcn_out = torch.tanh(x_gcn_out)
+
+            x = x_trend + x_gcn_out * self.res_scale
+            x = self.layer_norm(x)
+        else:
+            ind %= self.days
+            ind = ind.cpu().numpy()
+            adp = self.dgconstruct(self.nodevec_p1[ind], self.nodevec_p2, self.nodevec_p3, self.nodevec_pk)
+            new_supports = [adp]
+
+            x = x.reshape(-1, D)
+            x = self.reshape1(x)
+            x = x.reshape(B, T, N, 32)
+            x = x.permute(0, 3, 2, 1)
+            x = self.gconv(x, new_supports)
+            x = x.permute(0, 3, 2, 1)
+            x = x.reshape(-1, 32)
+            x = self.reshape2(x)
+            x = x.reshape(B, T, N, D)
 
         t_q = self.t_q_conv(x.permute(0, 3, 1, 2)).permute(0, 3, 2, 1)
         t_k = self.t_k_conv(x.permute(0, 3, 1, 2)).permute(0, 3, 2, 1)
@@ -270,20 +426,23 @@ class STSelfAttention(nn.Module):
         geo_attn = self.geo_attn_drop(geo_attn)
         geo_x = (geo_attn @ geo_v).transpose(2, 3).reshape(B, T, N, int(D * self.geo_ratio))
 
-        sem_q = self.sem_q_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
-        sem_k = self.sem_k_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
-        sem_v = self.sem_v_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
-        sem_q = sem_q.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
-        sem_k = sem_k.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
-        sem_v = sem_v.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
-        sem_attn = (sem_q @ sem_k.transpose(-2, -1)) * self.scale
-        if sem_mask is not None:
-            sem_attn.masked_fill_(sem_mask, float('-inf'))
-        sem_attn = sem_attn.softmax(dim=-1)
-        sem_attn = self.sem_attn_drop(sem_attn)
-        sem_x = (sem_attn @ sem_v).transpose(2, 3).reshape(B, T, N, int(D * self.sem_ratio))
+        if self.use_vq_router:
+            x = self.proj(torch.cat([t_x, geo_x], dim=-1))
+        else:
+            sem_q = self.sem_q_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+            sem_k = self.sem_k_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+            sem_v = self.sem_v_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+            sem_q = sem_q.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
+            sem_k = sem_k.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
+            sem_v = sem_v.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
+            sem_attn = (sem_q @ sem_k.transpose(-2, -1)) * self.scale
+            if sem_mask is not None:
+                sem_attn.masked_fill_(sem_mask, float('-inf'))
+            sem_attn = sem_attn.softmax(dim=-1)
+            sem_attn = self.sem_attn_drop(sem_attn)
+            sem_x = (sem_attn @ sem_v).transpose(2, 3).reshape(B, T, N, int(D * self.sem_ratio))
+            x = self.proj(torch.cat([t_x, geo_x, sem_x], dim=-1))
 
-        x = self.proj(torch.cat([t_x, geo_x, sem_x], dim=-1))
         x = self.proj_drop(x)
         return x
 
@@ -313,7 +472,8 @@ class STEncoderBlock(nn.Module):
             self, dim, s_attn_size, t_attn_size, geo_num_heads=4, sem_num_heads=2, t_num_heads=2, mlp_ratio=4.,
             qkv_bias=True, drop=0., attn_drop=0.,
             drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, device=torch.device('cpu'), type_ln="pre",
-            output_dim=1, num_nodes=170
+            output_dim=1, num_nodes=170,
+            use_vq_router=False, use_delay_conv=False, adj_init=None
     ):
         super().__init__()
         self.type_ln = type_ln
@@ -321,7 +481,8 @@ class STEncoderBlock(nn.Module):
         self.st_attn = STSelfAttention(
             dim, s_attn_size, t_attn_size, geo_num_heads=geo_num_heads, sem_num_heads=sem_num_heads,
             t_num_heads=t_num_heads, qkv_bias=qkv_bias,
-            attn_drop=attn_drop, proj_drop=drop, device=device, output_dim=output_dim, num_nodes=num_nodes
+            attn_drop=attn_drop, proj_drop=drop, device=device, output_dim=output_dim, num_nodes=num_nodes,
+            use_vq_router=use_vq_router, use_delay_conv=use_delay_conv, adj_init=adj_init
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -329,7 +490,7 @@ class STEncoderBlock(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
     def forward(self, x, ind, geo_mask=None, sem_mask=None):
-        if self.type_ln == 'pre':  # ture
+        if self.type_ln == 'pre':
             x = x + self.drop_path(
                 self.st_attn(self.norm1(x), ind, geo_mask=geo_mask, sem_mask=sem_mask))
             x = x + self.drop_path(self.mlp(self.norm2(x)))
@@ -343,39 +504,13 @@ class STEncoderBlock(nn.Module):
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+
 def norm_embedding(adj):
     torch.fill_(adj.diagonal(), 0)
     values, indices = torch.topk(adj, 5, dim=1)
     b = torch.zeros_like(adj)
     b.scatter_(1, indices, 1.0)
     return b
-
-
-class MovingAvg(nn.Module):
-    def __init__(self, kernel_size, stride):
-        super().__init__()
-        self.kernel_size = kernel_size
-        self.avg = nn.AvgPool1d(kernel_size=kernel_size, stride=stride, padding=0)
-
-    def forward(self, x):
-        B, T, N, D = x.shape
-        x = x.permute(0, 2, 3, 1).reshape(-1, 1, T)
-        front = x[:, :, 0:1].repeat(1, 1, self.kernel_size - 1)
-        x_padded = torch.cat([front, x], dim=-1)
-        x = self.avg(x_padded)
-        x = x.reshape(B, N, D, T).permute(0, 3, 1, 2)
-        return x
-
-
-class SeriesDecomposition(nn.Module):
-    def __init__(self, kernel_size):
-        super().__init__()
-        self.moving_avg = MovingAvg(kernel_size, stride=1)
-
-    def forward(self, x):
-        moving_mean = self.moving_avg(x)
-        res = x - moving_mean
-        return res, moving_mean
 
 
 class DeepTrendNet(nn.Module):
@@ -417,7 +552,7 @@ class DGSTA(AbstractTrafficStateModel):
 
         self.embed_dim = config.get('embed_dim', 64)
         self.skip_dim = config.get("skip_dim", 256)
-        lape_dim = config.get('lape_dim', 8)  # 位置嵌入 8
+        lape_dim = config.get('lape_dim', 8)
         geo_num_heads = config.get('geo_num_heads', 4)
         sem_num_heads = config.get('sem_num_heads', 2)
         t_num_heads = config.get('t_num_heads', 2)
@@ -450,13 +585,17 @@ class DGSTA(AbstractTrafficStateModel):
         self.task_level = config.get('task_level', 0)
         self.lape_dim = config.get('lape_dim', 200)
 
+        self.use_vq_router = config.get('use_vq_router', False)
+        self.use_delay_conv = config.get('use_delay_conv', False)
+        self.consistency_weight = config.get('consistency_weight', 0.1)
+
         if self.max_epoch * self.num_batches * self.world_size < self.step_size * self.output_window:
             self._logger.warning('Parameter `step_size` is too big with {} epochs and '
                                  'the model cannot be trained for all time steps.'.format(self.max_epoch))
         if self.use_curriculum_learning:
             self._logger.info('Use use_curriculum_learning!')
 
-        if self.type_short_path == "dist":  # false
+        if self.type_short_path == "dist":
             distances = sd_mx[~np.isinf(sd_mx)].flatten()
             std = distances.std()
             sd_mx = np.exp(-np.square(sd_mx / std))
@@ -487,7 +626,9 @@ class DGSTA(AbstractTrafficStateModel):
                 mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop, attn_drop=attn_drop, drop_path=enc_dpr[i],
                 act_layer=nn.GELU,
                 norm_layer=partial(nn.LayerNorm, eps=1e-6), device=self.device, type_ln=type_ln,
-                output_dim=self.output_dim, num_nodes=self.num_nodes
+                output_dim=self.output_dim, num_nodes=self.num_nodes,
+                use_vq_router=self.use_vq_router, use_delay_conv=self.use_delay_conv,
+                adj_init=self.adj_mx if self.use_vq_router else None
             ) for i in range(enc_depth)
         ])
 
@@ -519,7 +660,6 @@ class DGSTA(AbstractTrafficStateModel):
             self.input_decomp = SeriesDecomposition(kernel_size=5)
             self.deep_trend_net = DeepTrendNet(feat_dim, self.input_window, self.output_window)
             self.trend_fusion = nn.Parameter(torch.tensor(0.1))
-
 
     def cal_lape_emb(self, adj):
         adj = sp.coo_matrix(adj)
@@ -561,7 +701,6 @@ class DGSTA(AbstractTrafficStateModel):
         else:
             return main_pred
 
-    # 选择损失函数
     def get_loss_func(self, set_loss):
         if set_loss.lower() not in ['mae', 'mse', 'rmse', 'mape', 'logcosh', 'huber', 'quantile', 'masked_mae',
                                     'masked_mse', 'masked_rmse', 'masked_mape', 'masked_huber', 'r2', 'evar']:
@@ -576,7 +715,7 @@ class DGSTA(AbstractTrafficStateModel):
             lf = loss.masked_mape_torch
         elif set_loss.lower() == 'logcosh':
             lf = loss.log_cosh_loss
-        elif set_loss.lower() == 'huber':  # true
+        elif set_loss.lower() == 'huber':
             lf = partial(loss.huber_loss, delta=self.huber_delta)
         elif set_loss.lower() == 'quantile':
             lf = partial(loss.quantile_loss, delta=self.quan_delta)
@@ -598,23 +737,30 @@ class DGSTA(AbstractTrafficStateModel):
             lf = loss.masked_mae_torch
         return lf
 
-    # 计算损失值
     def calculate_loss_without_predict(self, y_true, y_predicted, batches_seen=None, set_loss='masked_mae'):
         lf = self.get_loss_func(set_loss=set_loss)
-        y_true = self._scaler.inverse_transform(y_true[..., :self.output_dim])  # 标准化
+        y_true = self._scaler.inverse_transform(y_true[..., :self.output_dim])
         y_predicted = self._scaler.inverse_transform(y_predicted[..., :self.output_dim])
+
+        total_consistency_loss = 0.0
+        if self.use_vq_router and self.training:
+            for block in self.encoder_blocks:
+                total_consistency_loss += block.st_attn.vq_router.consistency_loss
+            total_consistency_loss /= len(self.encoder_blocks)
+
         if self.training:
             if batches_seen % self.step_size == 0 and self.task_level < self.output_window:
                 self.task_level += 1
                 self._logger.info('Training: task_level increase from {} to {}'.format(
                     self.task_level - 1, self.task_level))
-                # self._logger.info('Current batches_seen is {}'.format(batches_seen))
-            if self.use_curriculum_learning:  # true
-                return lf(y_predicted[:, :self.task_level, :, :], y_true[:, :self.task_level, :, :])
+            if self.use_curriculum_learning:
+                pred_loss = lf(y_predicted[:, :self.task_level, :, :], y_true[:, :self.task_level, :, :])
             else:
-                return lf(y_predicted, y_true)
+                pred_loss = lf(y_predicted, y_true)
         else:
-            return lf(y_predicted, y_true)
+            pred_loss = lf(y_predicted, y_true)
+
+        return pred_loss + self.consistency_weight * total_consistency_loss
 
     def calculate_loss(self, batch, batches_seen=None, lap_mx=None):
         y_true = batch['y']

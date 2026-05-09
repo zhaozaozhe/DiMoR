@@ -21,7 +21,8 @@
     "set_loss": "huber",
     "huber_delta": 2,
     "mode": "average",
-    "use_deep_trend": false,
-    "use_vq_router": false,
-    "use_delay_conv": false
+    "use_deep_trend": true,
+    "use_vq_router": true,
+    "use_delay_conv": true,
+    "use_time_aware_adp": false
 }

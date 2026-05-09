@@ -169,8 +169,11 @@ class nconv(nn.Module):
         super(nconv, self).__init__()
 
     def forward(self, x, A):
-        x = torch.einsum('ncvl,nwv->ncwl', (x, A))
-        return x.contiguous()
+        x = x.permute(0, 3, 2, 1)
+        if A.dim() == 3:
+            A = A.unsqueeze(1)
+        x = torch.matmul(A, x)
+        return x.permute(0, 3, 2, 1).contiguous()
 
 
 class linear(nn.Module):
@@ -222,7 +225,8 @@ class gcn(nn.Module):
 
 
 class SpatialPatternRouter(nn.Module):
-    def __init__(self, num_nodes, num_graphs=10, input_dim=64, temperature=1.0, adj_init=None, embed_dim=10):
+    def __init__(self, num_nodes, num_graphs=10, input_dim=64, temperature=1.0, adj_init=None,
+                 embed_dim=10, use_time_aware=True):
         super().__init__()
         self.num_nodes = num_nodes
         self.temperature = temperature
@@ -251,9 +255,13 @@ class SpatialPatternRouter(nn.Module):
         nn.init.xavier_normal_(self.nodevec1)
         nn.init.xavier_normal_(self.nodevec2)
 
+        self.use_time_aware = use_time_aware
+        if self.use_time_aware:
+            self.time_embed = nn.Embedding(288, embed_dim)
+
         self.consistency_loss = 0.0
 
-    def forward(self, x_trend, training=True):
+    def forward(self, x_trend, ind=None, training=True):
         traffic_intensity = self.reduce_dim(x_trend).squeeze(-1)
         pattern_emb = self.spatial_compressor(traffic_intensity)
         logits = self.classifier(pattern_emb)
@@ -268,7 +276,13 @@ class SpatialPatternRouter(nn.Module):
         adj_vq = torch.einsum('btk, knm -> btnm', weights, self.graph_codebook)
         adj_vq = F.relu(adj_vq)
 
-        adj_adp = F.relu(torch.mm(self.nodevec1, self.nodevec2))
+        if self.use_time_aware and ind is not None:
+            time_idx = ind % 288
+            time_emb = self.time_embed(time_idx)
+            nodevec1_t = self.nodevec1.unsqueeze(0) * time_emb.unsqueeze(1)
+            adj_adp = F.relu(torch.matmul(nodevec1_t, self.nodevec2.unsqueeze(0)))
+        else:
+            adj_adp = F.relu(torch.mm(self.nodevec1, self.nodevec2))
 
         return adj_vq, adj_adp, weights
 
@@ -277,7 +291,7 @@ class STSelfAttention(nn.Module):
     def __init__(
             self, dim, s_attn_size, t_attn_size, geo_num_heads=4, sem_num_heads=2, t_num_heads=2, qkv_bias=False,
             attn_drop=0., proj_drop=0., device=torch.device('cpu'), output_dim=1, num_nodes=170,
-            use_vq_router=False, use_delay_conv=False, adj_init=None
+            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True
     ):
         super().__init__()
         assert dim % (geo_num_heads + sem_num_heads + t_num_heads) == 0
@@ -324,7 +338,8 @@ class STSelfAttention(nn.Module):
             self.series_decomp = SeriesDecomposition(kernel_size=5)
             self.num_graphs = 10
             self.vq_router = SpatialPatternRouter(num_nodes, self.num_graphs, input_dim=dim,
-                                                  temperature=1.0, adj_init=adj_init).to(device)
+                                                  temperature=1.0, adj_init=adj_init,
+                                                  use_time_aware=use_time_aware_adp).to(device)
             self.layer_norm = nn.LayerNorm(dim)
             self.res_scale = nn.Parameter(torch.ones(1) * 0.1)
             self.top_k = 20
@@ -366,7 +381,7 @@ class STSelfAttention(nn.Module):
         if self.use_vq_router:
             x_res, x_trend = self.series_decomp(x)
 
-            raw_vq, raw_adp, weights = self.vq_router(x_trend, training=self.training)
+            raw_vq, raw_adp, weights = self.vq_router(x_trend, ind=ind, training=self.training)
             adj_vq = self.sparsify_graph(raw_vq)
             adj_adp = self.sparsify_graph(raw_adp)
             new_supports = [adj_vq, adj_adp]
@@ -473,7 +488,7 @@ class STEncoderBlock(nn.Module):
             qkv_bias=True, drop=0., attn_drop=0.,
             drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, device=torch.device('cpu'), type_ln="pre",
             output_dim=1, num_nodes=170,
-            use_vq_router=False, use_delay_conv=False, adj_init=None
+            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True
     ):
         super().__init__()
         self.type_ln = type_ln
@@ -482,7 +497,8 @@ class STEncoderBlock(nn.Module):
             dim, s_attn_size, t_attn_size, geo_num_heads=geo_num_heads, sem_num_heads=sem_num_heads,
             t_num_heads=t_num_heads, qkv_bias=qkv_bias,
             attn_drop=attn_drop, proj_drop=drop, device=device, output_dim=output_dim, num_nodes=num_nodes,
-            use_vq_router=use_vq_router, use_delay_conv=use_delay_conv, adj_init=adj_init
+            use_vq_router=use_vq_router, use_delay_conv=use_delay_conv, adj_init=adj_init,
+            use_time_aware_adp=use_time_aware_adp
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -587,6 +603,7 @@ class DGSTA(AbstractTrafficStateModel):
 
         self.use_vq_router = config.get('use_vq_router', False)
         self.use_delay_conv = config.get('use_delay_conv', False)
+        self.use_time_aware_adp = config.get('use_time_aware_adp', True)
         self.consistency_weight = config.get('consistency_weight', 0.1)
 
         if self.max_epoch * self.num_batches * self.world_size < self.step_size * self.output_window:
@@ -628,6 +645,7 @@ class DGSTA(AbstractTrafficStateModel):
                 norm_layer=partial(nn.LayerNorm, eps=1e-6), device=self.device, type_ln=type_ln,
                 output_dim=self.output_dim, num_nodes=self.num_nodes,
                 use_vq_router=self.use_vq_router, use_delay_conv=self.use_delay_conv,
+                use_time_aware_adp=self.use_time_aware_adp,
                 adj_init=self.adj_mx if self.use_vq_router else None
             ) for i in range(enc_depth)
         ])
@@ -659,7 +677,7 @@ class DGSTA(AbstractTrafficStateModel):
             feat_dim = self.feature_dim - self.ext_dim
             self.input_decomp = SeriesDecomposition(kernel_size=5)
             self.deep_trend_net = DeepTrendNet(feat_dim, self.input_window, self.output_window)
-            self.trend_fusion = nn.Parameter(torch.tensor(0.1))
+            self.trend_fusion = nn.Parameter(torch.tensor(1.0 if self.use_vq_router else 0.1))
 
     def cal_lape_emb(self, adj):
         adj = sp.coo_matrix(adj)

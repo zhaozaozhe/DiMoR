@@ -1,0 +1,44 @@
+============================================================
+VQ Router Mechanism Analysis Report
+============================================================
+
+## 1. Codebook Template Diversity
+
+Layer 0: avg pairwise cosine = 0.0212, max = 0.1263
+Layer 1: avg pairwise cosine = 0.0074, max = 0.2683
+Layer 2: avg pairwise cosine = 0.0112, max = 0.0925
+Layer 3: avg pairwise cosine = 0.0205, max = 0.0787
+Layer 4: avg pairwise cosine = 0.0765, max = 0.1293
+Layer 5: avg pairwise cosine = 0.0029, max = 0.0603
+
+Interpretation: avg > 0.5 suggests codebook collapse (templates too similar).
+
+## 2. Routing Entropy
+Max possible entropy (uniform): 2.3026
+Mean entropy across 288 timeslots: 1.2901
+Min entropy: 0.8676, Max entropy: 1.4969
+Normalized mean entropy: 0.5603
+
+Interpretation: < 0.5 means one template dominates. > 0.8 means well-distributed usage.
+
+## 3. Template Usage Frequency (dominating template per timeslot)
+  Template 0: 288 timeslots (100.0%)
+  Template 1: 0 timeslots (0.0%)
+  Template 2: 0 timeslots (0.0%)
+  Template 3: 0 timeslots (0.0%)
+  Template 4: 0 timeslots (0.0%)
+  Template 5: 0 timeslots (0.0%)
+  Template 6: 0 timeslots (0.0%)
+  Template 7: 0 timeslots (0.0%)
+  Template 8: 0 timeslots (0.0%)
+  Template 9: 0 timeslots (0.0%)
+
+## 4. Peak vs Off-peak Template Distribution
+  Morning Peak (7-9h): top-3 templates = [0 4 6], weights = [0.5001 0.1733 0.1668]
+  Midday (10-16h): top-3 templates = [0 6 4], weights = [0.5001 0.1791 0.1765]
+  Evening Peak (17-19h): top-3 templates = [0 6 4], weights = [0.5001 0.1822 0.1717]
+  Night (0-6h): top-3 templates = [0 4 6], weights = [0.5611 0.1782 0.1667]
+  Late Night (20-23h): top-3 templates = [0 4 6], weights = [0.5957 0.1679 0.1667]
+
+## 5. Summary
+DIAGNOSIS: Mixed. Check individual metrics above for details.

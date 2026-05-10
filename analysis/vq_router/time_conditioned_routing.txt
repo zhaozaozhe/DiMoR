@@ -1,0 +1,81 @@
+======================================================================
+TIME-CONDITIONED ROUTING ANALYSIS
+Key question: Does routing change with time of day?
+======================================================================
+
+--- Layer 0 ---
+  Global: top-3=[6 9 8], pct=['1.000', '0.000', '0.000']
+  Per-period P(template|hour_group):
+    Morning(7-9)      : top-3=[6, 9, 8], pct=['1.000', '0.000', '0.000']
+    Midday(10-16)     : top-3=[6, 9, 8], pct=['1.000', '0.000', '0.000']
+    Evening(17-19)    : top-3=[6, 9, 8], pct=['1.000', '0.000', '0.000']
+    Night(0-6)        : top-3=[6, 9, 8], pct=['1.000', '0.000', '0.000']
+    Late(20-23)       : top-3=[6, 9, 8], pct=['1.000', '0.000', '0.000']
+  VERDICT: STATIC — dominant template = 6 across all periods
+
+--- Layer 1 ---
+  Global: top-3=[2 0 9], pct=['0.383', '0.203', '0.125']
+  Per-period P(template|hour_group):
+    Morning(7-9)      : top-3=[3, 2, 9], pct=['0.451', '0.304', '0.107']
+    Midday(10-16)     : top-3=[2, 9, 6], pct=['0.592', '0.095', '0.074']
+    Evening(17-19)    : top-3=[2, 6, 9], pct=['0.756', '0.102', '0.036']
+    Night(0-6)        : top-3=[0, 9, 5], pct=['0.369', '0.276', '0.092']
+    Late(20-23)       : top-3=[0, 2, 9], pct=['0.571', '0.390', '0.010']
+  VERDICT: DYNAMIC — dominant template varies across periods:
+    Morning(7-9): T3 (45.1%)
+    Midday(10-16): T2 (59.2%)
+    Evening(17-19): T2 (75.6%)
+    Night(0-6): T0 (36.9%)
+    Late(20-23): T0 (57.1%)
+
+--- Layer 2 ---
+  Global: top-3=[4 9 8], pct=['1.000', '0.000', '0.000']
+  Per-period P(template|hour_group):
+    Morning(7-9)      : top-3=[4, 9, 8], pct=['1.000', '0.000', '0.000']
+    Midday(10-16)     : top-3=[4, 9, 8], pct=['1.000', '0.000', '0.000']
+    Evening(17-19)    : top-3=[4, 9, 8], pct=['1.000', '0.000', '0.000']
+    Night(0-6)        : top-3=[4, 9, 8], pct=['1.000', '0.000', '0.000']
+    Late(20-23)       : top-3=[4, 9, 8], pct=['1.000', '0.000', '0.000']
+  VERDICT: STATIC — dominant template = 4 across all periods
+
+--- Layer 3 ---
+  Global: top-3=[0 9 8], pct=['1.000', '0.000', '0.000']
+  Per-period P(template|hour_group):
+    Morning(7-9)      : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Midday(10-16)     : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Evening(17-19)    : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Night(0-6)        : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Late(20-23)       : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+  VERDICT: STATIC — dominant template = 0 across all periods
+
+--- Layer 4 ---
+  Global: top-3=[0 9 8], pct=['1.000', '0.000', '0.000']
+  Per-period P(template|hour_group):
+    Morning(7-9)      : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Midday(10-16)     : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Evening(17-19)    : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Night(0-6)        : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Late(20-23)       : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+  VERDICT: STATIC — dominant template = 0 across all periods
+
+--- Layer 5 ---
+  Global: top-3=[0 9 8], pct=['1.000', '0.000', '0.000']
+  Per-period P(template|hour_group):
+    Morning(7-9)      : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Midday(10-16)     : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Evening(17-19)    : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Night(0-6)        : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+    Late(20-23)       : top-3=[0, 9, 8], pct=['1.000', '0.000', '0.000']
+  VERDICT: STATIC — dominant template = 0 across all periods
+
+======================================================================
+GLOBAL SUMMARY
+  Layer 0: STATIC — always T6
+  Layer 1: DYNAMIC — 3 different dominants across periods
+  Layer 2: STATIC — always T4
+  Layer 3: STATIC — always T0
+  Layer 4: STATIC — always T0
+  Layer 5: STATIC — always T0
+
+  Static layers: 5, Dynamic layers: 1
+======================================================================

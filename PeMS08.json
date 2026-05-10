@@ -24,5 +24,7 @@
     "use_deep_trend": true,
     "use_vq_router": true,
     "use_delay_conv": true,
-    "use_time_aware_adp": false
+    "use_time_aware_adp": false,
+    "use_balance_loss": false,
+    "lambda_balance": 0.001
 }

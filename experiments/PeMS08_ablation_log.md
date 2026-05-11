@@ -1,11 +1,33 @@
 # PeMS08 DGSTA Ablation Log
 
-## Baseline clean DGSTA
-- Branch:
-- Commit:
-- Command:
-- MAE:
-- RMSE:
-- MAPE:
-- Log file:
-- Notes:
+## 实验汇总
+
+| # | Exp ID | 配置 | Seed | @3 MAE | @6 MAE | @12 MAE | 备注 |
+|---|--------|------|------|--------|--------|---------|------|
+| 1 | 71098 | VQ+Trend+Delay (Full) | 1 | 11.894 | 12.406 | 13.228 | VQ 分支无 Sem Attention |
+| 2 | 68783 | Trend+Delay (−VQ) | 1 | 12.176 | 12.645 | 13.493 | |
+| 3 | 64832 | VQ+Delay (−Trend) | 1 | 11.912 | 12.421 | 13.222 | |
+| 4 | 43876 | VQ+Trend (−Delay) | 1 | 12.176 | 12.622 | 13.348 | |
+| 5 | — | 原始 DGSTA 基线 | — | 12.082 | 12.498 | 13.204 | 全部关闭 |
+| 6 | — | VQ+Trend+Delay (Full) | 0 | 12.117 | 12.570 | 13.306 | |
+| 7 | — | VQ+Trend+Delay (Full) | 2 | 12.200 | 12.682 | 13.413 | |
+| **8** | **58301** | **VQ+Trend+Delay (VQ+Sem 共存)** | **1** | **12.016** | **12.543** | **13.289** | **❌ 退化了** |
+
+## VQ+Sem 共存实验（最后一次结构性改动）
+
+- Commit: `6409977 feat(DiMoR): VQ+Semantic Attention 共存`
+- 改动: VQ 分支中 proj 从 Linear(48,64) 改为 Linear(64,64)，保留 Semantic Attention
+- 预期: 修复 VQ 分支缺失 Sem Attention 的结构性 bug
+- 实际 (seed=1): @3=12.016 (+0.12 vs Full), @6=12.543 (+0.14), @12=13.289 (+0.06)
+- **结论: VQ+Sem 共存导致性能退化。** 强行保留 Sem Attention 破坏了 VQ Router 的原有路径。
+
+## 完整 multi-seed 均值 (Full, VQ+Trend+Delay, 无 Sem fix)
+
+| Seed | @3 | @6 | @12 |
+|------|----|----|-----|
+| 0 | 12.117 | 12.570 | 13.306 |
+| 1 | 11.894 | 12.406 | 13.228 |
+| 2 | 12.200 | 12.682 | 13.413 |
+| **Mean±Std** | **12.070±0.13** | **12.553±0.11** | **13.316±0.08** |
+
+基线: @3=12.082 @6=12.498 @12=13.204

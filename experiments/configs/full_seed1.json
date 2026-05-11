@@ -16,7 +16,7 @@
     "t_num_heads": 2,
     "cluster_method": "kshape",
     "cand_key_days": 21,
-    "seed": 2,
+    "seed": 1,
     "type_ln": "pre",
     "set_loss": "huber",
     "huber_delta": 2,

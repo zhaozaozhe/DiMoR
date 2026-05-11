@@ -4,6 +4,39 @@
 
 ---
 
+## 0. Claude Code: 你被启动后要做的第一件事
+
+这是最高优先级任务。按顺序执行：
+
+### 步骤 A: 确认环境
+```bash
+which conda || echo "conda not found — tell user to install Miniconda first"
+nvidia-smi || echo "no GPU — will run on CPU (slow but works)"
+```
+
+### 步骤 B: 创建环境
+```bash
+conda env create -f ai_lab_env.yml
+```
+如果这步报错 "environment exists"，改成:
+```bash
+conda env update -f ai_lab_env.yml
+```
+
+### 步骤 C: 验证能跑
+```bash
+conda run -n ai_lab python -m py_compile libcity/model/traffic_flow_prediction/DGSTA.py
+conda run -n ai_lab python run_model.py --gpu_id 0 &
+sleep 30 && kill %1   # 跑 30 秒确认不报错就行
+```
+
+### 步骤 D: 确认就绪
+告诉用户: "环境就绪，DGSTA.py 编译通过，训练命令可以正常运行。现在开始读项目文档。"
+
+### 然后: 继续读下面的 Part 1-6, 理解项目全貌。
+
+---
+
 ## 1. 项目身份
 
 - **项目名**: DiMoR — **Di**screte **Mo**dal **R**outing for Explainable Traffic Forecasting

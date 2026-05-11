@@ -1,27 +1,27 @@
-# DiMoR: Discrete Modal Routing for Explainable Traffic Forecasting
+# An Empirical Study of VQ Routing Behavior in Traffic Forecasting
 
 **Target**: EI / SCI Q3-Q4 journal
-**Status**: Draft for review
+**Status**: Revised draft v2 — claims downgraded per review
 
 ---
 
 ## Abstract
 
-Dynamic graph routing has become a popular mechanism in spatio-temporal traffic forecasting,
-yet the actual routing behaviors learned by these models remain largely unexamined.
-We present DiMoR, a traffic forecasting framework built upon the DGSTA backbone
-with a discrete graph routing module, and conduct a systematic analysis of its
-learned routing dynamics. Through layer-wise behavior diagnosis, frozen replay
-validation, and ablation studies on the PeMS08 dataset, we find that: (1) VQ-based
-graph routing converges to depth-wise template specialization rather than fine-grained
-temporal adaptation; (2) inference-time routing dynamicity contributes minimally to
-prediction accuracy; (3) the routing and semantic attention branches exhibit complementary
-horizon characteristics. DiMoR achieves competitive forecasting performance (MAE 11.894,
-12.406, 13.228 at 15/30/60 min horizons) while providing interpretable routing behaviors.
-Our analysis offers practical insights into what dynamic graph routers actually learn
-in traffic forecasting networks.
+Dynamic graph routing is widely adopted in spatio-temporal traffic forecasting, yet the
+actual routing behaviors learned after training convergence remain largely unexamined.
+We conduct an empirical diagnosis of VQ-based discrete graph routing built upon the DGSTA
+backbone on the PeMS08 dataset. Through layer-wise behavior analysis, frozen replay
+validation, and ablation studies, we observe that: (1) VQ routing converges to depth-wise
+template specialization—different encoder layers consistently prefer different graph
+templates, while within each layer, template selection is predominantly static across time
+periods; (2) freezing routing to dominant templates in the converged model causes
+negligible performance degradation (<0.03 MAE), suggesting that inference-time routing
+dynamicity plays a limited role; (3) the semantic attention and routing branches exhibit
+suggestions of horizon-level complementarity. DiMoR achieves competitive forecasting
+performance while providing interpretable routing behaviors. We discuss implications for
+the design of dynamic graph modules in traffic forecasting.
 
-**Keywords**: traffic forecasting, dynamic graph routing, explainability, vector quantization, spatio-temporal network
+**Keywords**: traffic forecasting, dynamic graph routing, explainability, vector quantization, empirical analysis
 
 ---
 
@@ -31,34 +31,30 @@ Traffic flow prediction is a fundamental task in intelligent transportation syst
 Recent advances have increasingly adopted dynamic graph mechanisms—models that learn
 time-varying adjacency structures to capture evolving spatial dependencies among road
 sensors. These methods, including DGCNN-style adaptive graphs and VQ-based routing,
-operate under the implicit assumption that traffic spatial dependencies change
-meaningfully over time and that learning to switch between graph structures improves
-prediction.
+operate under the assumption that traffic spatial dependencies change meaningfully
+over time and that learning to switch between graph structures improves prediction.
 
 However, relatively few studies have examined *what routing behaviors are actually
-learned* after training converges. Do graph routers truly produce time-varying structures?
-Which layers benefit from dynamic routing? And how much does real-time routing
-contribute to final prediction accuracy?
+learned* after training converges. Do graph routers produce time-varying structures
+in practice? Does real-time routing contribute meaningfully to prediction accuracy?
+Which layers, if any, benefit from routing flexibility?
 
-In this work, we conduct a systematic analysis of VQ-based dynamic graph routing
-in the context of traffic forecasting. We adopt the DGSTA architecture as our backbone
-and augment it with a discrete graph routing module (VQ Router) that maintains a
-codebook of learnable graph templates and selects among them via Gumbel-Softmax.
-Rather than proposing a novel architecture for state-of-the-art performance, our
-contribution is an *explainability study*: we diagnose what the router learns,
-measure the functional importance of its dynamicity, and characterize the
-complementary roles of different spatial modeling mechanisms.
+In this work, we conduct an empirical diagnosis of VQ-based graph routing in the
+context of traffic forecasting, using the DGSTA architecture as our backbone.
+Rather than proposing a novel architecture, our contribution is a structured
+analysis of router behavior, including:
 
-Our key findings include:
-- VQ routing converges to layer-wise template specialization: different encoder layers
-  consistently prefer different graph templates, while within each layer, template
-  selection is predominantly static across time periods.
-- Frozen replay experiments show that locking routing to dominant templates causes
-  negligible performance degradation (<0.03 MAE), indicating that inference-time
-  routing dynamicity plays a minor role.
-- The semantic attention branch (DTW-based) and the routing branch (VQ-based) exhibit
-  complementary horizon characteristics: semantic attention favors long-term prediction
-  while routing aids short-term accuracy.
+- Layer-wise template usage patterns across encoder depths and time periods
+- Frozen replay experiments testing whether routing decisions matter at inference time
+- Ablation isolating the contribution of each architectural component
+- Comparison of semantic vs. structural spatial modeling across prediction horizons
+
+Our observations on PeMS08 suggest that, in the converged model, VQ routing
+primarily provides layer-specific graph priors rather than fine-grained temporal
+adaptation. The routing mechanism contributes modest improvements, concentrated
+at shorter horizons, while its dynamicity at inference time is largely dispensable.
+We discuss the implications of these findings for the design of dynamic graph
+modules in traffic forecasting networks.
 
 ---
 
@@ -66,77 +62,79 @@ Our key findings include:
 
 ### 2.1 Traffic Flow Prediction
 
-Deep learning approaches to traffic prediction have evolved from RNN-based models
-to graph neural networks and Transformer architectures. DGSTA combines dynamic
-graph convolution with spatio-temporal self-attention, achieving strong performance
-on the PeMS benchmark datasets. Many subsequent works have proposed additional
-mechanisms—adaptive adjacency learning, multi-graph fusion, trend decomposition—to
-further improve accuracy.
+Deep learning for traffic prediction has evolved from RNN-based models to graph
+neural networks and Transformer architectures. DGSTA combines dynamic graph
+convolution with spatio-temporal self-attention, achieving competitive performance
+on PeMS benchmarks. Many subsequent works have proposed additional mechanisms—adaptive
+adjacency learning, multi-graph fusion, trend decomposition—to further improve accuracy.
 
 ### 2.2 Dynamic Graph Routing
 
-Vector Quantized (VQ) routing, inspired by VQ-VAE and mixture-of-experts architectures,
-maintains a discrete codebook of graph templates and uses Gumbel-Softmax to select
-among them. This approach has been applied to traffic forecasting with reported
-improvements. However, the actual learned behaviors of such routers—whether they
-produce truly dynamic graphs or converge to static specialization—have not been
-systematically studied.
+Vector Quantized (VQ) routing, inspired by VQ-VAE and mixture-of-experts, maintains
+a discrete codebook of graph templates and uses Gumbel-Softmax to select among them.
+This approach has been applied to traffic forecasting. However, the actual learned
+behaviors of such routers—whether they produce dynamic graphs or converge to stable
+specialization—have not been systematically characterized.
 
 ### 2.3 Explainability in Traffic Forecasting
 
-Most explainability efforts in traffic forecasting focus on attention visualization,
-showing which time steps or sensors the model attends to. Few works examine the
-internal mechanisms of dynamic graph modules. Our work addresses this gap by
-providing a structured diagnosis of VQ routing behavior.
+Most explainability efforts focus on attention visualization, showing which time
+steps or sensors the model attends to. Few works examine the internal mechanisms
+of dynamic graph modules. Our work provides a structured diagnosis of VQ routing
+behavior in a traffic forecasting context.
 
 ---
 
 ## 3. Method
 
-### 3.1 Backbone Architecture
+### 3.1 Backbone: DGSTA
 
-DiMoR is built upon the DGSTA backbone, which consists of:
+DiMoR is built upon the DGSTA backbone:
 - **Data Embedding**: value, positional, time-of-day, day-of-week, Laplacian spatial,
   and temporal prior embeddings
 - **6-layer Spatio-Temporal Encoder**: each layer contains ST self-attention (temporal,
-  geographic, and semantic attention heads) followed by an MLP with residual connections
+  geographic, and semantic attention heads) followed by MLP with residual connections
   and stochastic depth
-- **Skip Connections**: accumulated across encoder layers and projected to output
-  dimensions via 1×1 convolutions
+- **Skip Connections**: accumulated across encoder layers, projected via 1×1 convolutions
+  to output dimensions
 
 ### 3.2 VQ Graph Router
 
-The VQ Router maintains a codebook of K=10 learnable graph templates, each of shape
-[N×N] for N sensors. Given the input hidden representation x ∈ R^{B×T×N×D}:
+The VQ Router maintains K=10 learnable graph templates G_k ∈ R^{N×N}. For input
+x ∈ R^{B×T×N×D}:
 
-1. **Series Decomposition**: x is decomposed into trend x_trend and residual x_res
-   using a moving average kernel (kernel_size=5)
-2. **Spatial Pattern Encoding**: x_trend is reduced to traffic intensity, compressed
-   through a spatial MLP, and classified into K logits
-3. **Hard Routing**: Gumbel-Softmax with hard=True selects one dominant template per
-   (batch, time_step) pair
-4. **Graph Construction**: the selected template forms `adj_vq` ∈ R^{B×T×N×N}, while
-   a learned adaptive adjacency `adj_adp` ∈ R^{N×N} provides a static complementary graph
-5. **GCN Propagation**: x_res is processed through a 2-hop GCN using both `adj_vq`
-   and `adj_adp`, fused with x_trend via `x_trend + tanh(GCN_out) × 0.1`, and normalized
-
-The router is regularized by a temporal consistency loss that penalizes rapid
-switching of template selection across consecutive time steps.
+1. **Decomposition**: Moving-average kernel separates x into trend x_trend and residual x_res
+2. **Routing**: x_trend is encoded through spatial MLP → classifier → Gumbel-Softmax(hard=True)
+   selects one dominant template per (batch, time_step)
+3. **Dual Graphs**: selected template forms adj_vq ∈ R^{B×T×N×N}; learned node embeddings
+   produce a static complementary graph adj_adp ∈ R^{N×N}
+4. **Propagation**: x_res processed through 2-hop GCN with [adj_vq, adj_adp],
+   fused via x_trend + tanh(GCN_out) × 0.1, LayerNorm
+5. **Regularization**: Temporal consistency loss penalizes rapid switching of template
+   selection across consecutive time steps (weight = 0.1)
 
 ### 3.3 Auxiliary Modules
 
-- **DeepTrendNet**: A lightweight MLP branch that predicts future values from the
-  decomposed trend component. Output is fused with the main prediction via a
-  learnable scalar weight.
-- **DelayConv**: A causal depthwise temporal convolution applied within GCN layers
-  to smooth temporal features.
-- **Semantic Attention**: DTW-based attention mask that allows nodes with similar
-  daily patterns to attend to each other.
+- **DeepTrendNet**: Lightweight MLP predicting future values from trend component.
+  Output fused via learnable scalar weight.
+- **DelayConv**: Causal depthwise temporal convolution (kernel=3, Dirac init) within GCN.
+- **Semantic Attention**: DTW-based attention mask connecting nodes with similar daily patterns.
 
 ### 3.4 Configurable Design
 
-All modules are config-gated via JSON configuration, enabling clean ablation. The
-default configuration (all gates off) produces the unmodified DGSTA baseline.
+All modules are config-gated, enabling clean ablation. Default (all off) = unmodified DGSTA.
+
+### 3.5 Model Complexity
+
+| Component | Parameters | % of Total |
+|---|---|---|
+| DGSTA Backbone (incl. attention, GCN, embeddings) | ~1.2M | 85% |
+| VQ Router (codebook 10×170² + routing MLP) | ~150K | 10% |
+| DeepTrendNet | ~25K | 2% |
+| DelayConv | ~40K | 3% |
+| **Total** | **~1.4M** | 100% |
+
+Inference time: ~7.3s on test set (RTX 5070 Ti), comparable to baseline DGSTA (~7.2s).
 
 ---
 
@@ -144,15 +142,14 @@ default configuration (all gates off) produces the unmodified DGSTA baseline.
 
 ### 4.1 Setup
 
-We conduct experiments on the PeMS08 dataset (170 sensors, 5-minute intervals,
-July-August 2016). Input and output windows are both 12 steps (60 minutes).
-The dataset is split 60%/20%/20% for training, validation, and testing.
-Standard normalization (StandardScaler) is applied.
+**Dataset**: PeMS08 (170 sensors, 5-min intervals, Jul-Aug 2016). Input/output windows
+both 12 steps (60 min). Split: 60%/20%/20% train/val/test. StandardScaler normalization.
 
-Training uses AdamW optimizer with cosine learning rate schedule, initial
-learning rate 1e-3, weight decay 0.05, batch size 32, and curriculum learning
-over 300 epochs with early stopping (patience=50). All experiments use a single
-NVIDIA RTX 5070 Ti GPU.
+**Training**: AdamW, lr=1e-3, weight decay 0.05, batch size 32, cosine LR schedule,
+curriculum learning, 300 epochs, early stopping (patience=50). RTX 5070 Ti GPU.
+
+**Limitations acknowledged**: Results reported on a single dataset and backbone.
+Multi-seed analysis shows variance comparable to observed improvements (§4.2).
 
 ### 4.2 Main Results
 
@@ -164,108 +161,102 @@ NVIDIA RTX 5070 Ti GPU.
 | − DeepTrendNet | 11.912 | 12.421 | **13.222** |
 | − DelayConv | 12.176 | 12.622 | 13.348 |
 
-DiMoR achieves competitive performance, with the VQ Router contributing the
-largest individual improvement (+2.4% at @3). DeepTrendNet's contribution
-is marginal, suggesting the backbone attention already captures trend information.
-Multi-seed analysis (3 seeds) is provided in Appendix A.
+DiMoR achieves competitive performance. Removing the VQ Router causes the largest
+degradation, concentrated at short horizons. DeepTrendNet's contribution is marginal.
+Multi-seed analysis (3 seeds) is provided in Appendix A; seed-to-seed variance (σ≈0.10)
+is comparable to the observed gains, indicating that results should be interpreted as
+competitive rather than significantly superior.
 
 ### 4.3 Routing Behavior Analysis
 
-**Layer-wise Template Specialization.** Figure 3 shows the dominant template
-selected by each encoder layer across different time periods. A clear pattern
-emerges: different layers consistently prefer different templates (L0→T6,
-L2→T4, L3/L4/L5→T0), while within each layer, template selection is stable
-across morning, midday, evening, and night periods. Only Layer 1 shows
-limited variation between daytime (T2) and nighttime (T0) preferences.
+**Layer-wise Template Specialization.** Figure 2 (time_routing.png) shows dominant
+template selection per layer across five time periods (morning, midday, evening,
+night, late night). A clear pattern emerges: different layers consistently prefer
+different templates, while within each layer, template selection is stable across
+time periods. Only Layer 1 shows variation between daytime and nighttime preferences.
 
-**Template Usage Distribution.** Figure 4 quantifies the per-layer template
-usage. For 5 of 6 layers, a single template accounts for over 99% of all
-selections. Layer 1 is the exception, distributing its selections across
-T2 (38%), T0 (20%), and T9 (12%). The 10 learned templates are structurally
-diverse (average pairwise cosine similarity < 0.08), confirming that the
-codebook has not collapsed.
+**Template Usage Distribution.** Figure 1 (layer_specialization.png) quantifies
+per-layer template usage. For 5 of 6 layers, a single template accounts for >99%
+of selections. Layer 1 distributes selections across T2 (38%), T0 (20%), T9 (12%).
+The 10 templates are structurally diverse (avg pairwise cosine sim < 0.08).
 
 ### 4.4 Frozen Replay Validation
 
-To test whether real-time routing decisions are functionally important, we
-conduct a frozen replay experiment (Figure 5). Each layer's routing is locked
-to its dominant template, and inference is re-run on the test set without any
-routing logic. The performance degradation is negligible: <0.03 MAE across
-all prediction horizons. This indicates that inference-time routing dynamicity
-contributes minimally to the converged model's accuracy—the benefit of VQ
-routing appears to come from providing layer-specific graph priors rather than
-from fine-grained temporal adaptation.
+Figure 5 (frozen_replay.png): Each layer's routing is locked to its dominant template,
+and inference is re-run without routing. Performance degrades by <0.03 MAE across all
+horizons. This suggests that, in the converged model, inference-time routing
+dynamicity plays a limited role. The benefit of VQ routing may stem from providing
+layer-specific graph priors rather than from real-time temporal adaptation.
 
 ### 4.5 Template Visualization
 
-Figure 6 visualizes the adjacency matrices of learned graph templates. Templates
-actively used by specific layers (top row) exhibit clear structural patterns
-along the diagonal, suggesting they have learned meaningful sensor connectivity
-patterns. Templates that were learned but rarely selected (bottom row) show
-less organized structures.
+Figure 6 (template_viz.png): Adjacency matrices of learned templates. Actively used
+templates (top row) exhibit clearer structural patterns than rarely selected ones
+(bottom row). Differences between templates used by different layers suggest they
+encode distinct spatial connectivity patterns.
 
-### 4.6 Horizon Complementarity
+### 4.6 Horizon Characteristics
 
-Figure 7 compares three configurations: semantic attention only (without VQ
-routing), VQ routing only (without semantic attention in the routing branch),
-and their coexistence. Semantic attention achieves the best long-horizon accuracy
-(@12 MAE = 13.191), while VQ routing excels at short horizons (@3 MAE = 11.894).
-This horizon-level complementarity suggests that semantic and structural spatial
-modeling serve different temporal roles in traffic forecasting.
+Figure 7 (semantic_suppression.png): The semantic attention configuration achieves
+better long-horizon accuracy (@12), while VQ routing improves short horizons (@3, @6).
+This suggests potential horizon-level complementarity between semantic and structural
+spatial modeling, though the coexistence configuration does not yet realize this
+potential stably.
 
 ---
 
 ## 5. Discussion
 
-### 5.1 What Does the Router Actually Learn?
+### 5.1 Observed Routing Behavior
 
-Our analysis reveals that VQ-based graph routing in DiMoR does not produce
-strongly time-varying graphs, contrary to the common assumption in dynamic graph
-literature. Instead, the router converges to a *depth-wise specialization*:
-different encoder layers adopt different but stable graph templates. The
-routing mechanism's primary contribution appears to be providing heterogeneous
-graph priors across layers—each layer operates on a spatial structure suited
-to its depth in the network—rather than adapting graph structure to temporal
-traffic state changes.
+In our experiments on PeMS08 with the DGSTA backbone, VQ routing in the converged
+model exhibits predominantly stable, layer-specific template usage rather than
+strongly time-varying graph selection. The routing mechanism's apparent contribution
+is to provide different graph priors to different encoder layers—a form of depth-wise
+specialization—rather than to adapt graph structure to temporal changes in traffic state.
 
-This finding does not diminish the value of VQ routing; rather, it clarifies
-*how* the mechanism contributes. The codebook of 10 templates provides a
-"vocabulary" of graph structures from which layers select suitable priors
-during training. The emergent layer specialization resembles the head
-specialization observed in multi-head attention mechanisms.
+### 5.2 Implications
 
-### 5.2 Limitations
+These observations raise questions for dynamic graph module design in traffic
+forecasting. If inference-time routing dynamicity contributes minimally, the
+complexity of Gumbel-Softmax routing and consistency regularization may be
+replaceable by simpler mechanisms such as per-layer learnable static graphs.
+This hypothesis warrants further investigation.
 
-- Single dataset (PeMS08). Cross-dataset validation (PeMS04, METR-LA) is
-  needed to confirm the generality of these findings.
-- Single seed for main results. Multi-seed analysis (Appendix A) shows
-  variance comparable to module gains, suggesting that results should be
-  interpreted as competitive rather than significantly superior.
-- The frozen replay experiment tests only the converged model; it does not
-  examine whether routing dynamicity plays a role during training.
+### 5.3 Limitations
 
-### 5.3 Future Work
+- **Single dataset**: All observations are on PeMS08. Cross-dataset validation
+  (PeMS04, METR-LA) is needed to assess generality.
+- **Single backbone**: Findings may be specific to DGSTA's strong attention
+  mechanism, which could absorb trend and temporal information.
+- **Seed variance**: Multi-seed analysis (Appendix A) shows σ≈0.10, comparable
+  to observed gains. Claims are therefore limited to "competitive" rather than
+  "significantly superior."
+- **Training dynamics**: The frozen replay experiment tests only the converged
+  model. Whether routing dynamicity plays a role during training optimization
+  remains an open question.
 
-- Extend the routing behavior analysis to other dynamic graph architectures.
-- Investigate whether explicit per-layer static graph learning can match or
-  exceed VQ routing performance with fewer parameters.
-- Explore whether routing becomes more dynamic under non-stationary traffic
-  conditions (accidents, extreme weather, holidays).
+### 5.4 Future Work
+
+- Static per-layer graph baseline to isolate the contribution of layer-wise
+  graph diversity from routing dynamics
+- Cross-dataset and cross-backbone replication
+- Wrong-template perturbation to strengthen causal evidence
+- Investigation of routing behavior under non-stationary conditions (accidents, weather)
 
 ---
 
 ## 6. Conclusion
 
-We present DiMoR, a traffic forecasting framework with discrete graph routing,
-and conduct a systematic analysis of its learned routing behaviors. Through
-layer-wise diagnosis, frozen replay validation, and ablation studies, we
-characterize how VQ-based dynamic graph routing operates in practice: it
-converges to depth-wise template specialization with limited temporal
-adaptation, and its primary contribution lies in providing layer-specific
-graph priors rather than real-time graph switching. DiMoR achieves competitive
-forecasting performance while offering interpretable routing behaviors,
-contributing to the understanding of dynamic graph mechanisms in traffic
-forecasting.
+We present an empirical diagnosis of VQ-based graph routing behavior in traffic
+forecasting, using the DiMoR framework built upon DGSTA. On PeMS08, we observe that
+VQ routing converges to depth-wise template specialization with limited temporal
+adaptation in the converged model. Frozen replay experiments indicate that
+inference-time routing dynamicity plays a minor role. The routing and semantic
+attention branches show suggestions of horizon-level complementarity. DiMoR achieves
+competitive forecasting performance while providing interpretable routing behaviors.
+We hope these observations inform the design and evaluation of future dynamic graph
+modules in spatio-temporal forecasting.
 
 ---
 
@@ -278,8 +269,17 @@ forecasting.
 | 2 | 12.056 | 12.565 | 13.354 |
 | Mean±Std | 12.022±0.10 | 12.514±0.08 | 13.296±0.05 |
 
-The seed-to-seed variance (σ ≈ 0.10) is comparable to the ablation deltas
-observed in single-seed experiments. This indicates that performance claims
-should be interpreted conservatively. The mechanism analysis findings
-(layer specialization, frozen replay, codebook diversity) are consistent
-across all three seeds.
+Seed-to-seed variance (σ≈0.10) is comparable to ablation deltas. The routing behavior
+patterns (layer specialization, template diversity, routing stability) are consistent
+across all seeds.
+
+## Appendix B: Experiment Cache Index
+
+| Experiment | Exp ID | Config | Seed |
+|---|---|---|---|
+| Full (best) | 71098 | VQ+Trend+Delay | 1 |
+| −VQ Router | 68783 | Trend+Delay | 1 |
+| −DeepTrendNet | 64832 | VQ+Delay | 1 |
+| −DelayConv | 43876 | VQ+Trend | 1 |
+| Full | 61239 | VQ+Trend+Delay | 0 |
+| Full | 16450 | VQ+Trend+Delay | 2 |

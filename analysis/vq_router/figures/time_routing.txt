@@ -1,0 +1,56 @@
+Time-Conditioned Routing — Dominant Template by Hour Group
+======================================================================
+
+--- Layer 0 ---
+  Unique dominants across periods: 1
+  Morning(7-9)      : T6 (100.0%)
+  Midday(10-16)     : T6 (100.0%)
+  Evening(17-19)    : T6 (100.0%)
+  Night(0-6)        : T6 (100.0%)
+  Late(20-23)       : T6 (100.0%)
+  VERDICT: STATIC
+
+--- Layer 1 ---
+  Unique dominants across periods: 3
+  Morning(7-9)      : T3 (45.0%)
+  Midday(10-16)     : T2 (59.6%)
+  Evening(17-19)    : T2 (75.6%)
+  Night(0-6)        : T0 (36.7%)
+  Late(20-23)       : T0 (57.0%)
+  VERDICT: DYNAMIC
+
+--- Layer 2 ---
+  Unique dominants across periods: 1
+  Morning(7-9)      : T4 (100.0%)
+  Midday(10-16)     : T4 (100.0%)
+  Evening(17-19)    : T4 (100.0%)
+  Night(0-6)        : T4 (100.0%)
+  Late(20-23)       : T4 (100.0%)
+  VERDICT: STATIC
+
+--- Layer 3 ---
+  Unique dominants across periods: 1
+  Morning(7-9)      : T0 (100.0%)
+  Midday(10-16)     : T0 (100.0%)
+  Evening(17-19)    : T0 (100.0%)
+  Night(0-6)        : T0 (100.0%)
+  Late(20-23)       : T0 (100.0%)
+  VERDICT: STATIC
+
+--- Layer 4 ---
+  Unique dominants across periods: 1
+  Morning(7-9)      : T0 (100.0%)
+  Midday(10-16)     : T0 (100.0%)
+  Evening(17-19)    : T0 (100.0%)
+  Night(0-6)        : T0 (100.0%)
+  Late(20-23)       : T0 (100.0%)
+  VERDICT: STATIC
+
+--- Layer 5 ---
+  Unique dominants across periods: 1
+  Morning(7-9)      : T0 (100.0%)
+  Midday(10-16)     : T0 (100.0%)
+  Evening(17-19)    : T0 (100.0%)
+  Night(0-6)        : T0 (100.0%)
+  Late(20-23)       : T0 (100.0%)
+  VERDICT: STATIC

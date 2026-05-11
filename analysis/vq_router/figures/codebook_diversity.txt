@@ -1,0 +1,12 @@
+Codebook Template Diversity — Pairwise Cosine Similarity
+=======================================================
+Layer    Avg Sim    Max Sim    Interpretation
+-------------------------------------------------------
+L0       0.0212      0.1263      HEALTHY
+L1       0.0074      0.2683      HEALTHY
+L2       0.0112      0.0925      HEALTHY
+L3       0.0205      0.0787      HEALTHY
+L4       0.0765      0.1293      HEALTHY
+L5       0.0029      0.0603      HEALTHY
+
+Healthy = templates are diverse (not collapsed).

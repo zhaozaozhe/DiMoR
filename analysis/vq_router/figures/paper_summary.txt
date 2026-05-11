@@ -1,0 +1,16 @@
+DiMoR VQ Router — Mechanism Analysis Summary
+==================================================
+
+Finding 1: Codebook is HEALTHY
+  10 template graphs are highly diverse (avg cosine < 0.08).
+  No codebook collapse detected.
+
+Finding 2: Routing is LAYER-STATIC
+  5/6 layers always select the same template regardless of time.
+  1/6 layers show time-varying template selection.
+  Layers choose DIFFERENT templates from each other.
+
+Finding 3: Gain is from DEPTH-WISE CAPACITY, not temporal adaptation
+  Different layers specialize to different graph topologies.
+  This explains why VQ Router improves short-term prediction
+  but does not provide strongly time-varying dynamic graphs.

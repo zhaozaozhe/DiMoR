@@ -7,6 +7,8 @@
 \usepackage{multirow}
 \usepackage{array}
 \usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algorithmic}
 
 \begin{document}
 
@@ -17,7 +19,7 @@
 \maketitle
 
 \begin{abstract}
-Dynamic graph routing is widely adopted in spatio-temporal traffic forecasting, yet the actual routing behaviors learned after training convergence remain largely unexamined. We conduct an empirical diagnosis of VQ-based discrete graph routing built upon the DGSTA backbone on the PeMS08 dataset. Through layer-wise behavior analysis, frozen replay validation, and ablation studies, we observe that VQ routing converges to depth-wise template specialization: different encoder layers consistently prefer different graph templates, while within each layer, template selection is predominantly static across time periods. Only one of six layers exhibits limited temporal variation. Freezing routing to dominant templates in the converged model causes negligible performance degradation ($<$0.03 MAE), suggesting that inference-time routing dynamicity plays a minor role. Geographic visualization of learned templates reveals interpretable spatial patterns — including local propagation and long-range corridor coupling — that correlate with time-of-day traffic characteristics. Analysis of template edge overlap shows that the four active templates encode nearly disjoint topological priors (Jaccard index $\leq$ 0.02). Training dynamics reveal an extended high-entropy exploration phase ($\sim$220 epochs) preceding final convergence, providing insight into why the VQ mechanism outperforms static per-layer graphs. DiMoR achieves competitive forecasting performance while providing these interpretable routing behaviors.
+Dynamic graph routing is widely adopted in spatio-temporal traffic forecasting, yet the actual routing behaviors learned after training convergence remain largely unexamined. We conduct an empirical diagnosis of VQ-based discrete graph routing built upon the DGSTA backbone on the PeMS08 dataset. Our analysis reveals that VQ routing converges to depth-wise template specialization: different encoder layers consistently prefer different graph templates, while within each layer, template selection is predominantly static across time periods. Freezing routing to dominant templates in the converged model causes negligible performance degradation ($<$0.03 MAE), suggesting that inference-time routing dynamicity plays a minor role. This creates an apparent paradox: the router's real-time decisions are largely dispensable, yet replacing the VQ mechanism with independently learned per-layer static graphs causes performance to collapse below the original baseline. Training trajectory analysis offers a potential resolution: the router maintains near-maximum entropy ($\sim$0.99) for the vast majority of training, indicating an extended phase of broad structural exploration that static graphs bypass entirely. Geographic visualization of learned templates reveals interpretable spatial patterns---including local propagation and long-range corridor coupling---with quantitative fidelity metrics showing 30--50$\times$ larger degradation under random template substitution. Taken together, these observations suggest that the VQ router's primary contribution may lie in training-time structural exploration rather than inference-time graph switching. DiMoR achieves competitive forecasting performance while providing these interpretable routing behaviors.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -26,80 +28,106 @@ traffic forecasting, dynamic graph routing, explainability, vector quantization,
 
 \section{Introduction}
 
-Traffic flow prediction is a fundamental task in intelligent transportation systems. Recent advances have increasingly adopted dynamic graph mechanisms—models that learn time-varying adjacency structures to capture evolving spatial dependencies among road sensors. These methods operate under the assumption that traffic spatial dependencies change meaningfully over time and that learning to switch between graph structures improves prediction.
+Traffic flow prediction is a fundamental task in intelligent transportation systems. Recent advances have increasingly adopted dynamic graph mechanisms---models that learn time-varying adjacency structures to capture evolving spatial dependencies among road sensors. These methods operate under the implicit assumption that traffic spatial dependencies change meaningfully over time and that learning to switch between graph structures improves prediction.
 
 However, relatively few studies have examined \emph{what routing behaviors are actually learned} after training converges. Do graph routers produce time-varying structures in practice? Does real-time routing contribute meaningfully to prediction accuracy? And what spatial patterns, if any, do the learned graph templates encode?
 
-In this work, we conduct an empirical diagnosis of VQ-based graph routing in the context of traffic forecasting, using the DGSTA architecture as our backbone. Rather than proposing a novel architecture, our contribution is a structured analysis of router behavior, including:
-\begin{itemize}
-    \item Layer-wise template usage patterns across encoder depths and time periods
-    \item Frozen replay experiments testing whether routing decisions matter at inference time
-    \item Ablation isolating the contribution of each architectural component
-    \item Geographic interpretation of learned graph templates with quantitative spatial statistics
-\end{itemize}
+In this work, we conduct an empirical diagnosis of VQ-based graph routing in the context of traffic forecasting, using the DGSTA architecture as our backbone. Rather than proposing a novel architecture, our contribution is a structured analysis of router behavior, spanning layer-wise template usage, frozen replay validation, ablation studies, and geographic interpretation of learned graph templates with quantitative spatial statistics.
 
-Our observations on PeMS08 suggest that, in the converged model, VQ routing primarily provides layer-specific graph priors rather than fine-grained temporal adaptation. The routing mechanism contributes modest improvements, concentrated at shorter horizons, while its dynamicity at inference time is largely dispensable. However, a naive static per-layer graph baseline significantly underperforms, implying that the training process enabled by VQ routing—codebook competition and discrete exploration—plays a role that simple static parameterization cannot replicate.
+Our observations on PeMS08 reveal an apparent paradox. On one hand, VQ routing converges to predominantly static, layer-specific template assignments---freezing these assignments at inference time causes negligible degradation ($<$0.03 MAE). On the other hand, simplifying the router into independently learned per-layer static graphs causes performance to collapse below the original DGSTA baseline. This tension---real-time routing decisions matter little, yet the routing mechanism appears essential during training---motivates the central investigation of this work. Training trajectory analysis suggests a potential resolution: the router undergoes an extended high-entropy exploration phase ($\sim$220 epochs) before converging to specialization, a structural search process that static parameterization cannot replicate.
 
 \section{Related Work}
 
 \subsection{Traffic Flow Prediction}
 
-Deep learning for traffic prediction has evolved from RNN-based models to graph neural networks and Transformer architectures. DGSTA combines dynamic graph convolution with spatio-temporal self-attention, achieving competitive performance on PeMS benchmarks. Subsequent works have proposed adaptive adjacency learning, multi-graph fusion, and trend decomposition to further improve accuracy.
+Deep learning for traffic prediction has evolved from RNN-based models to graph neural networks and Transformer architectures. DGSTA combines dynamic graph convolution with spatio-temporal self-attention, achieving competitive performance on PeMS benchmarks. Subsequent works have proposed adaptive adjacency learning, multi-graph fusion, and trend decomposition.
 
 \subsection{Dynamic Graph Routing}
 
-Vector Quantized (VQ) routing, inspired by VQ-VAE and mixture-of-experts architectures, maintains a discrete codebook of graph templates and uses Gumbel-Softmax to select among them. This approach has been applied to traffic forecasting. However, the actual learned behaviors—whether routers produce dynamic graphs or converge to stable specialization—have not been systematically characterized.
+Vector Quantized (VQ) routing, inspired by VQ-VAE and mixture-of-experts architectures, maintains a discrete codebook of graph templates and uses Gumbel-Softmax to select among them. This approach has been applied to traffic forecasting. However, the actual learned behaviors---whether routers produce dynamic graphs or converge to stable specialization---have not been systematically characterized.
 
 \subsection{Explainability in Traffic Forecasting}
 
-Most explainability efforts focus on attention visualization or case studies. Few works examine the internal mechanisms of dynamic graph modules. Our work provides a structured diagnosis of VQ routing behavior, combining layer-wise analysis with quantitative spatial characterization of learned templates.
+Most explainability efforts focus on attention visualization or case studies. Few works examine the internal mechanisms of dynamic graph modules. Our work provides a structured diagnosis of VQ routing behavior, combining layer-wise analysis with quantitative spatial characterization of learned templates and XAI-aligned fidelity metrics.
 
 \section{Method}
 
 \subsection{Backbone: DGSTA}
 
-DiMoR is built upon the DGSTA backbone, which consists of:
-\begin{itemize}
-    \item \textbf{Data Embedding}: value, positional, time-of-day, day-of-week, Laplacian spatial, and temporal prior embeddings
-    \item \textbf{6-layer Spatio-Temporal Encoder}: each layer contains ST self-attention (temporal, geographic, and semantic attention heads) followed by an MLP with residual connections and stochastic depth
-    \item \textbf{Skip Connections}: accumulated across encoder layers, projected via $1\times1$ convolutions to output dimensions
-\end{itemize}
+DiMoR is built upon the DGSTA backbone. Given historical traffic observations $\mathbf{X} \in \mathbb{R}^{B \times T_{in} \times N \times F}$ with batch size $B$, $T_{in}=12$ input steps, $N$ sensors, and $F$ features, the backbone encodes the input through a data embedding layer that combines value, positional, time-of-day, day-of-week, Laplacian spatial, and temporal prior embeddings.
+
+The embedded representation passes through $L=6$ encoder layers. Each layer contains spatio-temporal self-attention (temporal, geographic, and semantic attention heads), followed by an MLP with residual connections and stochastic depth. Skip connections accumulate across layers and are projected via $1\times1$ convolutions to produce the final prediction $\hat{\mathbf{Y}} \in \mathbb{R}^{B \times T_{out} \times N \times 1}$ with $T_{out}=12$.
 
 \subsection{VQ Graph Router}
 
-The VQ Router maintains $K=10$ learnable graph templates $\mathbf{G}_k \in \mathbb{R}^{N \times N}$ for $N$ sensors. For input $\mathbf{x} \in \mathbb{R}^{B \times T \times N \times D}$:
+The VQ Router operates within each encoder layer independently. Each layer maintains a codebook of $K=10$ learnable graph templates $\{\mathbf{G}_k \in \mathbb{R}^{N \times N}\}_{k=1}^{K}$. Given the layer input $\mathbf{x} \in \mathbb{R}^{B \times T \times N \times D}$:
 
-\begin{enumerate}
-    \item \textbf{Decomposition}: A moving-average kernel separates $\mathbf{x}$ into a trend component $\mathbf{x}_{trend}$ and residual $\mathbf{x}_{res}$.
-    \item \textbf{Routing}: $\mathbf{x}_{trend}$ is encoded through a spatial MLP, reduced to traffic intensity, and classified into $K$ logits. Gumbel-Softmax with hard sampling selects one dominant template per $(batch, time\_step)$ pair.
-    \item \textbf{Dual Graphs}: The selected template forms $\mathbf{A}_{vq} \in \mathbb{R}^{B \times T \times N \times N}$, while learned node embeddings produce a static complementary graph $\mathbf{A}_{adp} \in \mathbb{R}^{N \times N}$.
-    \item \textbf{Propagation}: $\mathbf{x}_{res}$ is processed through a 2-hop Graph Convolutional Network (GCN) using both $\mathbf{A}_{vq}$ and $\mathbf{A}_{adp}$ as support matrices. The output is fused with $\mathbf{x}_{trend}$ via $\mathbf{x}_{trend} + \tanh(\text{GCN}_{out}) \times 0.1$, followed by LayerNorm.
-    \item \textbf{Regularization}: A temporal consistency loss penalizes rapid switching of template selection across consecutive time steps, weighted at 0.1.
-\end{enumerate}
+\noindent\textbf{Step 1: Series Decomposition.} A moving-average kernel separates $\mathbf{x}$ into trend and residual components:
+\begin{equation}
+\mathbf{x}_{trend} = \text{MA}(\mathbf{x}), \quad \mathbf{x}_{res} = \mathbf{x} - \mathbf{x}_{trend}
+\label{eq:decomp}
+\end{equation}
 
-After the GCN stage, temporal and geographic self-attention heads process the representation. The VQ Router operates within each encoder layer independently, meaning that each of the 6 layers maintains its own codebook and routing mechanism.
+\noindent\textbf{Step 2: Router Input Encoding.} The trend component is projected through a spatial encoder to produce routing logits:
+\begin{equation}
+\mathbf{z} = \text{MLP}_{router}\big(\text{Reduce}(\mathbf{x}_{trend})\big) \in \mathbb{R}^{B \times T \times K}
+\label{eq:logits}
+\end{equation}
+where $\text{Reduce}(\cdot)$ collapses the feature dimension and $\text{MLP}_{router}$ consists of a spatial compressor ($\mathbb{R}^{N} \to \mathbb{R}^{64} \to \mathbb{R}^{32}$) followed by a linear classifier.
+
+\noindent\textbf{Step 3: Discrete Template Selection.} Hard routing via Gumbel-Softmax:
+\begin{equation}
+\mathbf{w}_{b,t} = \text{Gumbel-Softmax}(\mathbf{z}_{b,t}, \tau=1.0, \text{hard=True}) \in \{0,1\}^{K}
+\label{eq:gumbel}
+\end{equation}
+where $\mathbf{w}_{b,t}^{(k)} = 1$ if template $k$ is selected at batch element $b$, time step $t$.
+
+\noindent\textbf{Step 4: Graph Construction.} The selected template forms the dynamic adjacency, while learned node embeddings $\mathbf{U}, \mathbf{V} \in \mathbb{R}^{N \times d_e}$ provide a complementary static graph:
+\begin{equation}
+\mathbf{A}_{vq} = \sum_{k=1}^{K} \mathbf{w}_{b,t}^{(k)} \cdot \mathbf{G}_k \in \mathbb{R}^{B \times T \times N \times N}, \quad
+\mathbf{A}_{adp} = \text{ReLU}(\mathbf{U} \mathbf{V}^\top) \in \mathbb{R}^{N \times N}
+\label{eq:graphs}
+\end{equation}
+
+Both matrices undergo a sparsification step: each row is truncated to its top-20 values, temperature-scaled, and re-normalized via softmax.
+
+\noindent\textbf{Step 5: GCN Propagation.} The residual component is processed through a 2-hop graph convolution with support matrices $[\mathbf{A}_{vq}, \mathbf{A}_{adp}]$:
+\begin{equation}
+\mathbf{x}_{gcn} = \sum_{m=0}^{2} \sum_{s \in \{\mathbf{A}_{vq}, \mathbf{A}_{adp}\}} \mathbf{W}_m^{(s)} (\mathbf{s}^m \mathbf{x}_{res})
+\label{eq:gcn}
+\end{equation}
+where $\mathbf{s}^m$ denotes $m$-hop propagation via the support matrix $\mathbf{s}$. The GCN output is fused with the trend component:
+\begin{equation}
+\mathbf{x}_{out} = \text{LayerNorm}\big(\mathbf{x}_{trend} + \tanh(\mathbf{x}_{gcn}) \times \alpha\big)
+\label{eq:fusion}
+\end{equation}
+with $\alpha = 0.1$ as a learnable scale parameter.
+
+\noindent\textbf{Step 6: Consistency Regularization.} To encourage temporally smooth routing, a consistency loss penalizes rapid switching:
+\begin{equation}
+\mathcal{L}_{cons} = \frac{1}{B(T-1)K} \sum_{b,t,k} \big(\mathbf{z}_{b,t+1}^{(k)} - \mathbf{z}_{b,t}^{(k)}\big)^2
+\label{eq:cons}
+\end{equation}
 
 \subsection{Auxiliary Modules}
 
-\textbf{DelayConv}: A causal depthwise temporal convolution (kernel size 3, Dirac initialization) applied within GCN layers to smooth temporal features. \textbf{DeepTrendNet}: A lightweight MLP branch that predicts future traffic values from the decomposed trend component. Fused with the main prediction via a learnable scalar weight. \textbf{Semantic Attention}: DTW-based attention mask that allows nodes with similar daily traffic patterns to attend to each other.
+\textbf{DelayConv}: A causal depthwise temporal convolution (kernel size 3, Dirac initialization) applied to GCN inputs for local temporal smoothing. \textbf{DeepTrendNet}: A lightweight MLP predicting future values from the trend component of the input traffic signal, fused via a learnable scalar weight. \textbf{Semantic Attention}: A DTW-based attention mask that allows nodes with similar daily traffic patterns to attend to each other.
 
-All modules are config-gated via JSON configuration, enabling clean ablation. The default configuration (all gates off) produces the unmodified DGSTA baseline.
+All modules are config-gated via JSON configuration. The default configuration (all gates off) produces the unmodified DGSTA baseline.
 
 \subsection{Model Complexity}
 
-DiMoR contains approximately 1.4M parameters, with the VQ Router accounting for roughly 10\% of the total ($\sim$150K). The backbone (attention, GCN, embeddings) constitutes $\sim$85\%. Inference on the PeMS08 test set takes approximately 7.3 seconds on an NVIDIA RTX 5070 Ti, comparable to the baseline DGSTA (7.2s).
+DiMoR contains approximately 1.4M parameters (VQ Router: $\sim$150K, backbone: $\sim$1.2M). Inference takes $\sim$7.3s on an NVIDIA RTX 5070 Ti, comparable to the baseline DGSTA ($\sim$7.2s).
 
 \section{Experiments}
 
 \subsection{Setup}
 
-We conduct experiments on the PeMS08 dataset (170 sensors, 5-minute intervals, July–August 2016, California highway network). Input and output windows are both 12 steps (60 minutes). The dataset is split 60\%/20\%/20\% for training, validation, and testing. StandardScaler normalization is applied.
-
-Training uses AdamW optimizer with a cosine learning rate schedule (initial lr $=$ 1e-3, weight decay $=$ 0.05), batch size 32, and curriculum learning over 300 epochs with early stopping (patience $=$ 50). All experiments use a single NVIDIA RTX 5070 Ti GPU.
+We use the PeMS08 dataset (170 sensors, 5-minute intervals, July--August 2016, California highway network). Input and output windows are both 12 steps (60 minutes), split 60\%/20\%/20\% for train/val/test. StandardScaler normalization. Training: AdamW, cosine LR schedule (initial lr=$10^{-3}$, weight decay=0.05), batch size 32, curriculum learning, 300 epochs, early stopping (patience=50). Single NVIDIA RTX 5070 Ti GPU.
 
 \subsection{Main Results}
 
-Table~\ref{tab:ablation} presents the ablation results. DiMoR achieves competitive forecasting performance. Removing the VQ Router causes the largest degradation, concentrated at short horizons. DeepTrendNet's contribution is marginal—consistent with the observation that the backbone attention mechanism already captures trend information. DelayConv provides moderate improvements.
+While Table~\ref{tab:ablation} establishes that the VQ Router contributes meaningfully to prediction accuracy, it does not reveal \emph{how} this contribution is achieved. We next examine the router's internal behavior.
 
 \begin{table}[h]
 \centering
@@ -118,53 +146,29 @@ $-$ DelayConv & 12.176 & 12.622 & 13.348 \\
 \end{tabular}
 \end{table}
 
-Multi-seed analysis (3 seeds) reveals seed-to-seed variance of $\sigma \approx 0.10$ MAE, comparable to the observed ablation deltas. The routing behavior patterns (layer specialization, template diversity, routing stability) are consistent across all seeds. This indicates that performance claims should be interpreted as competitive rather than significantly superior. Full multi-seed results are provided in Appendix~A.
+Removing the VQ Router causes the largest degradation, concentrated at short horizons. DeepTrendNet's contribution is marginal---consistent with the backbone attention mechanism already capturing trend information. DelayConv provides moderate improvements. Multi-seed analysis (3 seeds, Appendix~A) reveals seed-to-seed variance ($\sigma\approx 0.10$ MAE) comparable to the observed ablation deltas. Routing behavior patterns are consistent across all seeds.
 
-\subsection{Layer-wise Routing Specialization}
+\subsection{Routing Behavior: Layer-wise Static Specialization}
 
-\textbf{Figure~1} shows (a) the per-layer template usage distribution and (b) time-conditioned dominant template selection across five time periods (AM Peak, Midday, PM Peak, Night, Late Night).
+\textbf{Figure~1} shows (a) per-layer template usage distribution and (b) time-conditioned dominant template selection across five periods. Different encoder layers consistently prefer different templates: Layer 0 selects T6, Layer 2 selects T4, and Layers 3--5 all select T0. Only Layer 1 exhibits distributed usage (T2: 38\%, T0: 20\%, T9: 12\%). For 5 of 6 layers, a single template accounts for $>$99\% of all selections. The time-conditioned analysis confirms these preferences are temporally stable---the dominant template remains unchanged across all five periods for all layers except Layer 1.
 
-A clear pattern emerges: different encoder layers consistently prefer different graph templates. Layer 0 selects Template 6, Layer 2 selects Template 4, and Layers 3 through 5 all select Template 0. Only Layer 1 exhibits distributed template usage, spreading its selections across Template 2 (38\%), Template 0 (20\%), and Template 9 (12\%). For 5 of 6 layers, a single template accounts for over 99\% of all selections.
+To test whether these real-time routing decisions matter, we lock each layer's routing to its dominant template and re-run inference. \textbf{Figure~2} shows the resulting MAE degradation: $<$0.03 across all horizons, with multi-seed error bars. Together, these findings indicate that VQ routing converges to a layer-wise static structural prior---the routing mechanism, despite being designed for time-varying graph selection, learns depth-dependent specialization rather than temporal adaptation, and its inference-time dynamicity is largely dispensable.
 
-The time-conditioned analysis confirms that these preferences are temporally stable. The dominant template for each layer remains unchanged across all five time periods, with the exception of Layer 1, which shifts from Template 3 in the morning to Template 2 during midday and evening.
+\subsection{The Central Puzzle: Static Replacement Fails, Yet Training Dynamics Persist}
 
-This observation indicates that VQ routing converges to a \emph{layer-wise static structural prior}. The routing mechanism, despite being designed for time-varying graph selection, learns depth-dependent specialization rather than temporal adaptation.
+The observation that routing is predominantly static raises a natural question: if the router does not meaningfully switch between templates, why not replace it with simpler per-layer static graphs? We test this by replacing the entire VQ routing pipeline with independently learnable static adjacency matrices---one per encoder layer---eliminating all routing machinery while retaining slightly more parameters.
 
-\subsection{Frozen Replay Validation}
+The static per-layer baseline achieves 12.889 / 13.631 / 14.879 (@3/@6/@12)---significantly worse than both the VQ Router and the original DGSTA baseline. This is noteworthy: if VQ routing merely provides layer-specific static priors, a simpler static mechanism should approach its performance. The observed collapse suggests that the VQ mechanism contributes something during training that independent static parameterization cannot replicate.
 
-To quantify whether real-time routing decisions are functionally important, we conduct a frozen replay experiment. Each layer's routing is locked to its dominant template, and inference is re-run on the test set. \textbf{Figure~2} shows the resulting MAE degradation across three prediction horizons, with error bars indicating standard deviation over 3 seeds.
+\textbf{Figure~5} offers a potential clue. Tracking routing entropy at 15 sampled checkpoints across training reveals an unexpected trajectory: the router maintains near-maximum entropy ($H_{norm} \approx 0.99$) for over 220 epochs before entering a final convergence phase. This extended high-entropy phase indicates broad structural exploration---the model evaluates diverse graph configurations through codebook competition before committing to specialized assignments. Static graphs, initialized randomly and optimized independently, bypass this exploration entirely. We leave rigorous characterization of this phase transition---including whether entropy collapses abruptly or gradually in the final epochs---for future work.
 
-The degradation is consistently small: less than 0.03 MAE across all horizons. At the 60-minute horizon (@12), the degradation reaches approximately 0.023 MAE, while at 15 minutes (@3) it is merely 0.010 MAE. All degradations are within one standard deviation of zero.
+\subsection{Interpretability Analysis}
 
-This suggests that in the converged model, inference-time routing dynamicity plays a limited role. The benefit of the VQ Router appears to derive from providing layer-specific graph priors—different layers operating on different spatial structures—rather than from real-time temporal adaptation of graph topology.
+\textbf{Geographic Characterization.} \textbf{Figure~3} maps the four actively used templates to the PeMS08 sensor network using a topology-preserving layout. Quantitative hop-distance analysis (Appendix~C) confirms: T0 exhibits 100\% local edges (within 3 hops), consistent with neighborhood propagation; T2 shows 61\% long-range edges (beyond 5 hops), consistent with corridor coupling. \textbf{Figure~4} tracks Layer 1 template activation over 24 hours: T2 (long-range corridor coupling) dominates during daytime (59--76\%), while T0 (local propagation) dominates at night (37--57\%). \textbf{Figure~7} provides a micro-geographic zoom confirming these patterns at the individual sensor level.
 
-\subsection{Static Per-Layer Graph Baseline}
+\textbf{Structural Disentanglement.} \textbf{Figure~6} presents the Jaccard similarity index of edge overlaps among the four active templates. The near-zero off-diagonal values ($\leq$0.018, mean 0.009) demonstrate that the router extracts highly disjoint, mutually complementary topological priors---not slight variations of a single base graph.
 
-We further test whether the layer-wise specialization achieved by the VQ Router can be replicated by a simpler mechanism: replacing the entire VQ routing pipeline with independently learnable static adjacency matrices, one per encoder layer. This baseline contains slightly more parameters than the VQ Router but eliminates all routing machinery (no codebook, no Gumbel-Softmax, no consistency loss).
-
-The static per-layer baseline achieves 12.889 / 13.631 / 14.879 (@3/@6/@12), significantly worse than both the VQ Router configuration and the original DGSTA baseline. This result is noteworthy: if VQ routing merely provides layer-specific static priors, a simpler static mechanism should match or approach its performance. The observed collapse suggests that the training process enabled by VQ routing—codebook competition, discrete template exploration, and the auxiliary consistency loss—contributes to optimization in ways that independent static graphs cannot replicate. We leave a rigorous disentanglement of these training dynamics to future work.
-
-\subsection{Geographic Interpretation of Learned Templates}
-
-\textbf{Figure~3} visualizes the four actively used graph templates mapped to the PeMS08 sensor network using a topology-preserving spectral layout based on the road-network hop-distance matrix. Each template reveals a distinct spatial connectivity pattern.
-
-Quantitative hop-distance analysis of template edges confirms the visual observations. Template 0 exhibits 100\% local edges (within 3 hops on the road network)—a pattern consistent with local neighborhood propagation. Template 2 shows 61\% long-range edges (beyond 5 hops)—consistent with corridor-style coupling that spans the highway network. Template 4 shows 50\% long-range edges, and Template 6 shows 39\% long-range edges with a balanced mid-range component.
-
-\textbf{Figure~4} tracks the activation of the dominant templates in Layer 1—the only layer showing temporal variation—over a 24-hour period. During daytime, Template 2 (long-range corridor coupling) increases its usage, reaching 59–76\% during midday and evening. At night, Template 0 (local propagation) becomes dominant, reaching 37–57\%. This temporal shift is consistent with the intuitive transition in traffic behavior from long-range commuting patterns during business hours to localized nocturnal activity.
-
-These observations suggest that even though VQ routing does not produce highly dynamic graph switching, the learned templates encode traffic-meaningful spatial structures. The router's limited temporal variation appears to align with coarse-grained traffic regime changes rather than fine-grained time-step adaptation.
-
-To ground these quantitative metrics in physical road network topology, \textbf{Figure~7} provides a micro-geographic zoom into a selected highway corridor segment. The visualization confirms that Template 0 strictly links immediate upstream and downstream sensors (local propagation), whereas Template 2 frequently bypasses intermediate nodes to directly couple distant locations along the corridor.
-
-\subsection{Quantitative Evaluation of Interpretability}
-
-While the visualizations in Sections~4.3–4.6 provide qualitative insight into routing behavior, we further align our evaluation with quantitative interpretability metrics from the explainable AI (XAI) literature. \textbf{Table~2} summarizes three metrics: Fidelity, Structural Disentanglement, and Spatial-Semantic Locality.
-
-\textbf{Fidelity (Intervention Test)}: A standard approach in XAI is to test whether an extracted explanation—here, the learned graph templates—encodes faithful information rather than arbitrary noise. We substitute the four actively used templates with random graphs of identical sparsity (same number of edges per row, randomly assigned), while keeping the model weights and routing assignment unchanged. This random substitution causes MAE degradation of $+$0.44 / $+$0.65 / $+$0.99 across the three horizons—approximately 30 to 50 times larger than the degradation observed under frozen replay ($+$0.01 / $+$0.01 / $+$0.02). This large gap quantitatively demonstrates that the learned templates are not arbitrary: they encode critical, faithful spatial dependencies that random graphs of equivalent density cannot replicate.
-
-\textbf{Structural Disentanglement}: As shown in Figure~6 and quantified in Table~2, the mean off-diagonal Jaccard index among the four active templates is 0.009—near-zero. In XAI terms, this indicates high structural disentanglement: the templates represent mutually exclusive spatial priors rather than redundant variations of a single graph structure.
-
-\textbf{Spatial-Semantic Locality}: Table~2 also reports the hop-distance distributions from Appendix~C as interpretability-relevant locality metrics. Template T0 exhibits 100\% local edges (within 3 road-network hops), consistent with a local propagation spatial prior. Template T2 exhibits 61\% long-range edges (beyond 5 hops), consistent with corridor coupling.
+\textbf{Quantitative Fidelity.} To align with XAI evaluation standards, Table~\ref{tab:xai} reports three interpretability metrics. (1) \emph{Fidelity}: substituting active templates with random graphs of identical sparsity causes MAE degradation of $+$0.44/$+$0.65/$+$0.99---approximately 30--50$\times$ larger than frozen replay degradation ($+$0.01/$+$0.01/$+$0.02). This demonstrates that learned templates encode faithful spatial dependencies that random graphs cannot replicate. (2) \emph{Disentanglement}: the mean off-diagonal Jaccard index of 0.009 indicates mutually exclusive template structures. (3) \emph{Locality}: hop-distance distributions (T0: 100\% $<$3 hops; T2: 61\% $>$5 hops) quantify the receptive-field characteristics.
 
 \begin{table}[h]
 \centering
@@ -174,59 +178,27 @@ While the visualizations in Sections~4.3–4.6 provide qualitative insight into 
 \toprule
 Metric & Measurement & Value \\
 \midrule
-Fidelity & $\Delta$MAE (Random $-$ Original) & $+$0.44 / $+$0.65 / $+$0.99 \\
-Fidelity (ref.) & $\Delta$MAE (Frozen $-$ Original) & $+$0.01 / $+$0.01 / $+$0.02 \\
-Disentanglement & Mean Off-diagonal Jaccard & 0.009 \\
-Locality (T0) & Edges within $<$3 hops & 100.0\% \\
-Long-range (T2) & Edges beyond $>$5 hops & 60.9\% \\
+Fidelity & $\Delta$MAE (Random $-$ Original) / (Frozen $-$ Original) & $+$0.44/+0.65/+0.99 / $+$0.01/+0.01/+0.02 \\
+Disentanglement & Mean Off-diagonal Jaccard & 0.009 \\[4pt]
+Locality (T0) & Edges within $<$3 road hops & 100.0\% \\
+Locality (T2) & Edges beyond $>$5 road hops & 60.9\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Template Edge Overlap: Structural Complementarity}
-
-\textbf{Figure~6} presents the Jaccard similarity index of edge overlaps among the four actively used templates (T0, T2, T4, T6). The near-zero off-diagonal values ($\leq$ 0.018) demonstrate that the VQ router does not merely learn slight variations of a base graph. Rather, it extracts highly disjoint, mutually complementary topological priors. Each template contributes a structurally distinct edge set, and the router's per-layer specialization assigns these complementary structures to different encoder depths.
-
-\subsection{Training Dynamics: Extended Exploration Before Convergence}
-
-\textbf{Figure~5} tracks the normalized routing entropy at 15 sampled checkpoints across the training trajectory. An unexpected pattern emerges: the router maintains a near-maximum entropy state ($H_{norm} \approx 0.99$) for the vast majority of the training process—spanning over 220 epochs—before entering a final convergence phase. This indicates that the VQ router undergoes an extended period of broad structural exploration, during which all templates are evaluated near-equally.
-
-This observation provides a potential explanation for the failure of the static per-layer baseline (Section~4.5). Static per-layer graphs, initialized randomly and trained independently, bypass this prolonged exploration phase entirely. In the VQ router, the codebook competition and Gumbel-Softmax mechanism may serve as an implicit structural search process: the model explores diverse graph configurations throughout training, allowing the optimization trajectory to benefit from template comparison and competition, and only commits to specialized assignments in the final convergence stage. A rigorous characterization of this phase transition—including whether it corresponds to a sudden collapse or a gradual entropy decline in the very last epochs—is left for future work.
-
 \section{Discussion}
 
-\subsection{Observed Routing Behavior}
+Taken together, our experiments reveal an apparent paradox: inference-time routing decisions are largely dispensable (Section~4.3, Figure~2), yet removing the VQ routing mechanism during training causes the static per-layer baseline to underperform even the original DGSTA (Section~4.4).
 
-In our experiments on PeMS08 with the DGSTA backbone, VQ routing in the converged model exhibits predominantly stable, layer-specific template usage rather than strongly time-varying graph selection. The routing mechanism's apparent contribution is to provide different graph priors to different encoder layers—a form of depth-wise specialization—rather than to adapt graph structure to fine-grained temporal changes in traffic state.
+The training trajectory observed in Figure~5 offers a plausible interpretation: the VQ router undergoes an extended phase of broad structural exploration---maintaining near-maximum entropy for the vast majority of training---before converging to stable layer-wise specialization. This prolonged exploration phase, enabled by codebook competition and Gumbel-Softmax routing, may serve as an implicit structural search mechanism. Static graphs, initialized randomly and optimized independently, bypass this exploration entirely, which may explain their failure to match VQ Router performance. We emphasize that this interpretation remains a plausible hypothesis; rigorous causal isolation of the training dynamics---including whether the entropy collapse occurs abruptly or gradually---is left for future work.
 
-The frozen replay experiment reinforces this interpretation: locking routing to dominant templates causes minimal performance degradation, indicating that inference-time dynamicity is largely dispensable in the converged model.
+\textbf{Limitations.} (1) \emph{Single dataset}: All observations are on PeMS08. The specific spatial semantics are inherently tied to the PeMS highway topology. Cross-dataset validation is needed to assess whether the overarching phenomenon of layer-wise specialization generalizes. (2) \emph{Single backbone}: Findings may depend on DGSTA's strong attention mechanism. (3) \emph{Seed variance}: $\sigma\approx 0.10$ MAE, comparable to observed gains; performance claims are therefore ``competitive'' rather than ``significantly superior.'' (4) \emph{Geographic interpretation}: Template semantic labels are descriptive characterizations supported by quantitative hop-distance statistics, not causal proofs.
 
-\subsection{The Training Dynamics Puzzle}
-
-The static per-layer baseline experiment presents an intriguing observation. If VQ routing merely converges to layer-wise static specialization, one might expect static per-layer graphs—which provide the same layer-specific capacity—to match VQ Router performance. Yet the static baseline significantly underperforms, falling below even the original DGSTA configuration.
-
-As visualized in Figure~5, the routing entropy reveals an unexpected training trajectory: the router maintains near-maximum entropy ($\sim$0.99) for the vast majority of the training process, indicating an extended phase of broad structural exploration. It is only in the final stages of convergence that the entropy collapses into the static layer-wise specialization observed at inference. This prolonged ``superposition'' phase likely acts as a critical structural search mechanism—the model explores diverse spatial configurations through codebook competition before committing to specialized, stable assignments.
-
-This trajectory provides a plausible explanation for why the static per-layer baseline fails. Static graphs, initialized randomly and optimized independently, bypass this exploration phase entirely. Without the Gumbel-Softmax routing mechanism and the codebook competition it enables, the optimization process cannot benefit from the joint exploration of multiple graph hypotheses. A rigorous characterization of this phase transition is left for future work.
-
-\subsection{Limitations}
-
-\begin{itemize}
-    \item \textbf{Single dataset}: All observations are on PeMS08. As an empirical interpretability study, the specific spatial semantics (e.g., corridor coupling patterns) are inherently tied to the PeMS highway topology. Cross-dataset validation is needed to assess whether the overarching phenomenon of layer-wise specialization generalizes.
-    \item \textbf{Single backbone}: Findings may depend on DGSTA's strong attention mechanism, which could absorb trend and temporal information.
-    \item \textbf{Seed variance}: Multi-seed analysis shows $\sigma \approx 0.10$ MAE, comparable to observed ablation gains. Performance claims are therefore limited to ``competitive'' rather than ``significantly superior.''
-    \item \textbf{Geographic interpretation}: Template semantic labels are descriptive characterizations supported by quantitative hop-distance statistics, not causal proofs.
-\end{itemize}
-
-\subsection{Implications for Dynamic Graph Design}
-
-Our observations raise questions for the design of dynamic graph modules in traffic forecasting. If inference-time routing dynamicity contributes minimally, the complexity of Gumbel-Softmax routing and consistency regularization may be replaceable by simpler mechanisms. However, the failure of the static per-layer baseline suggests that training-time dynamics provide optimization benefits that simpler architectures cannot replicate. Understanding this distinction between training-time and inference-time contributions may inform more efficient dynamic graph designs.
+\textbf{Implications.} Our observations raise questions for dynamic graph module design. If inference-time routing dynamicity contributes minimally, simpler mechanisms may suffice for certain applications. However, the failure of the static baseline suggests that the training-time dynamics of codebook competition provide optimization benefits that static parameterization cannot replicate. Understanding this distinction may inform more efficient designs---for instance, retaining codebook-based exploration during training while collapsing to static assignments at inference.
 
 \section{Conclusion}
 
-We present an empirical diagnosis of VQ-based graph routing behavior in traffic forecasting, built upon the DGSTA backbone. On the PeMS08 dataset, we observe that VQ routing converges to depth-wise template specialization with limited temporal dynamicity. Frozen replay experiments indicate that inference-time routing dynamicity plays a minor role in prediction accuracy. Geographic analysis of learned templates reveals interpretable spatial patterns—local propagation and long-range corridor coupling—that correlate with time-of-day traffic characteristics. A static per-layer graph baseline significantly underperforms, implying that the training dynamics of routing contribute beyond what simple layer-specific parameterization can achieve.
-
-DiMoR achieves competitive forecasting performance while providing interpretable routing behaviors. We hope these observations inform the design and evaluation of dynamic graph modules in spatio-temporal forecasting, and encourage further investigation into the training dynamics of discrete routing mechanisms.
+We present an empirical diagnosis of VQ-based graph routing behavior in traffic forecasting. On PeMS08, we observe that VQ routing converges to depth-wise template specialization with limited temporal dynamicity---inference-time routing decisions are largely dispensable, yet the routing mechanism proves essential during training. Geographic analysis reveals that learned templates encode interpretable spatial patterns with high fidelity. We hope these observations---and the tension they highlight between training-time and inference-time contributions---inform the design and evaluation of dynamic graph modules in spatio-temporal forecasting.
 
 \appendix
 
@@ -275,7 +247,7 @@ Full & 16450 & VQ+Trend+Delay & 2 \\
 \caption{Edge hop-distance distribution per template.}
 \begin{tabular}{lcccc}
 \toprule
-Template & Local ($<$3 hop) & Mid (3–5 hop) & Long ($>$5 hop) & Interpretation \\
+Template & Local ($<$3 hop) & Mid (3--5 hop) & Long ($>$5 hop) & Interpretation \\
 \midrule
 T0 & 100.0\% & 0.0\% & 0.0\% & Local propagation \\
 T2 & 8.7\% & 30.4\% & 60.9\% & Long-range corridor \\

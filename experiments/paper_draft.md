@@ -140,11 +140,31 @@ These observations suggest that even though VQ routing does not produce highly d
 
 To ground these quantitative metrics in physical road network topology, **Figure 7** provides a micro-geographic zoom into a selected highway corridor segment. The visualization confirms that Template 0 strictly links immediate upstream and downstream sensors (local propagation), whereas Template 2 frequently bypasses intermediate nodes to directly couple distant locations along the corridor. This micro-view complements the macro-perspective of Figure 3 and reinforces the interpretation that different templates encode spatially distinct connectivity patterns.
 
-### 4.7 Template Edge Overlap: Structural Complementarity
+### 4.7 Quantitative Evaluation of Interpretability
+
+While the visualizations in Sections 4.3–4.6 provide qualitative insight into routing behavior, we further align our evaluation with quantitative interpretability metrics from the explainable AI (XAI) literature. **Table 2** summarizes three metrics: Fidelity, Structural Disentanglement, and Spatial-Semantic Locality.
+
+**Fidelity (Intervention Test).** A standard approach in XAI is to test whether an extracted explanation — here, the learned graph templates — encodes faithful information rather than arbitrary noise. We substitute the four actively used templates with random graphs of identical sparsity (same number of edges per row, randomly assigned), while keeping the model weights and routing assignment unchanged. This random substitution causes MAE degradation of +0.44 / +0.65 / +0.99 across the three horizons — approximately 30 to 50 times larger than the degradation observed under frozen replay (+0.01 / +0.01 / +0.02). This large gap quantitatively demonstrates that the learned templates are not arbitrary: they encode critical, faithful spatial dependencies that random graphs of equivalent density cannot replicate.
+
+**Structural Disentanglement.** As shown in Figure 6 and quantified in Table 2, the mean off-diagonal Jaccard index among the four active templates is 0.009 — near-zero. In XAI terms, this indicates high structural disentanglement: the templates represent mutually exclusive spatial priors rather than redundant variations of a single graph structure.
+
+**Spatial-Semantic Locality.** Table 2 also reports the hop-distance distributions from Appendix C as interpretability-relevant locality metrics. Template T0 exhibits 100% local edges (within 3 road-network hops), consistent with a local propagation spatial prior. Template T2 exhibits 61% long-range edges (beyond 5 hops), consistent with corridor coupling. These metrics quantify the receptive-field characteristics that the visualizations in Figures 3 and 7 qualitatively suggest.
+
+**Table 2: Quantitative Metrics for VQ Routing Interpretability.**
+
+| Metric | Measurement | Value | Interpretation |
+|---|---|---|---|
+| Fidelity | ΔMAE (Random − Original) | +0.44 / +0.65 / +0.99 | Templates encode faithful spatial structure (30–50× random baseline) |
+| Fidelity (ref.) | ΔMAE (Frozen − Original) | +0.01 / +0.01 / +0.02 | Inference-time routing contributes minimally |
+| Disentanglement | Mean Off-diagonal Jaccard | 0.009 | Templates are mutually exclusive (non-redundant) |
+| Locality (T0) | Edges within <3 hops | 100.0% | Strict local neighborhood propagation |
+| Long-range (T2) | Edges beyond >5 hops | 60.9% | Long-range corridor coupling |
+
+### 4.8 Template Edge Overlap: Structural Complementarity
 
 **Figure 6** presents the Jaccard similarity index of edge overlaps among the four actively used templates (T0, T2, T4, T6). The near-zero off-diagonal values (≤ 0.018) demonstrate that the VQ router does not merely learn slight variations of a base graph. Rather, it extracts highly disjoint, mutually complementary topological priors. Each template contributes a structurally distinct edge set, and the router's per-layer specialization assigns these complementary structures to different encoder depths. This finding is consistent with the layer specialization observed in Figure 1: different layers not only prefer different templates, but those templates encode fundamentally non-overlapping spatial connectivity patterns.
 
-### 4.8 Training Dynamics: Extended Exploration Before Convergence
+### 4.9 Training Dynamics: Extended Exploration Before Convergence
 
 **Figure 5** tracks the normalized routing entropy at 15 sampled checkpoints across the training trajectory. The data reveals an unexpected pattern: the router maintains a near-maximum entropy state (H_norm ≈ 0.99) for the vast majority of the training process — spanning over 220 epochs — before entering a final convergence phase. This indicates that the VQ router undergoes an extended period of broad structural exploration, during which all templates are evaluated near-equally.
 

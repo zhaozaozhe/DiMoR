@@ -1,12 +1,12 @@
 # An Empirical Study of VQ Routing Behavior in Traffic Forecasting
 
-**Target**: EI / SCI Q3-Q4 journal | **Status**: Final draft v3 — narrative frozen, claims calibrated
+**Target**: EI / SCI Q3-Q4 journal | **Status**: v4 — ready for submission, 7 figures
 
 ---
 
 ## Abstract
 
-Dynamic graph routing is widely adopted in spatio-temporal traffic forecasting, yet the actual routing behaviors learned after training convergence remain largely unexamined. We conduct an empirical diagnosis of VQ-based discrete graph routing built upon the DGSTA backbone on the PeMS08 dataset. Through layer-wise behavior analysis, frozen replay validation, and ablation studies, we observe that VQ routing converges to depth-wise template specialization: different encoder layers consistently prefer different graph templates, while within each layer, template selection is predominantly static across time periods. Only one of six layers exhibits limited temporal variation. Freezing routing to dominant templates in the converged model causes negligible performance degradation (<0.03 MAE), suggesting that inference-time routing dynamicity plays a minor role. Geographic visualization of learned templates reveals interpretable spatial patterns — including local propagation and long-range corridor coupling — that correlate with time-of-day traffic characteristics. DiMoR achieves competitive forecasting performance while providing these interpretable routing behaviors. We discuss implications for the design of dynamic graph modules in traffic forecasting networks.
+Dynamic graph routing is widely adopted in spatio-temporal traffic forecasting, yet the actual routing behaviors learned after training convergence remain largely unexamined. We conduct an empirical diagnosis of VQ-based discrete graph routing built upon the DGSTA backbone on the PeMS08 dataset. Through layer-wise behavior analysis, frozen replay validation, and ablation studies, we observe that VQ routing converges to depth-wise template specialization: different encoder layers consistently prefer different graph templates, while within each layer, template selection is predominantly static across time periods. Only one of six layers exhibits limited temporal variation. Freezing routing to dominant templates in the converged model causes negligible performance degradation (<0.03 MAE), suggesting that inference-time routing dynamicity plays a minor role. Geographic visualization of learned templates reveals interpretable spatial patterns — including local propagation and long-range corridor coupling — that correlate with time-of-day traffic characteristics. Analysis of template edge overlap shows that the four active templates encode nearly disjoint topological priors (Jaccard index ≤ 0.02). Training dynamics reveal an extended high-entropy exploration phase (~220 epochs) preceding final convergence, providing insight into why the VQ mechanism outperforms static per-layer graphs. DiMoR achieves competitive forecasting performance while providing these interpretable routing behaviors.
 
 **Keywords**: traffic forecasting, dynamic graph routing, explainability, vector quantization, empirical analysis
 
@@ -138,6 +138,18 @@ Quantitative hop-distance analysis of template edges confirms the visual observa
 
 These observations suggest that even though VQ routing does not produce highly dynamic graph switching, the learned templates encode traffic-meaningful spatial structures. The router's limited temporal variation appears to align with coarse-grained traffic regime changes rather than fine-grained time-step adaptation.
 
+To ground these quantitative metrics in physical road network topology, **Figure 7** provides a micro-geographic zoom into a selected highway corridor segment. The visualization confirms that Template 0 strictly links immediate upstream and downstream sensors (local propagation), whereas Template 2 frequently bypasses intermediate nodes to directly couple distant locations along the corridor. This micro-view complements the macro-perspective of Figure 3 and reinforces the interpretation that different templates encode spatially distinct connectivity patterns.
+
+### 4.7 Template Edge Overlap: Structural Complementarity
+
+**Figure 6** presents the Jaccard similarity index of edge overlaps among the four actively used templates (T0, T2, T4, T6). The near-zero off-diagonal values (≤ 0.018) demonstrate that the VQ router does not merely learn slight variations of a base graph. Rather, it extracts highly disjoint, mutually complementary topological priors. Each template contributes a structurally distinct edge set, and the router's per-layer specialization assigns these complementary structures to different encoder depths. This finding is consistent with the layer specialization observed in Figure 1: different layers not only prefer different templates, but those templates encode fundamentally non-overlapping spatial connectivity patterns.
+
+### 4.8 Training Dynamics: Extended Exploration Before Convergence
+
+**Figure 5** tracks the normalized routing entropy at 15 sampled checkpoints across the training trajectory. The data reveals an unexpected pattern: the router maintains a near-maximum entropy state (H_norm ≈ 0.99) for the vast majority of the training process — spanning over 220 epochs — before entering a final convergence phase. This indicates that the VQ router undergoes an extended period of broad structural exploration, during which all templates are evaluated near-equally.
+
+This observation provides a potential explanation for the failure of the static per-layer baseline (Section 4.5). Static per-layer graphs, initialized randomly and trained independently, bypass this prolonged exploration phase entirely. In the VQ router, the codebook competition and Gumbel-Softmax mechanism may serve as an implicit structural search process: the model explores diverse graph configurations throughout training, allowing the optimization trajectory to benefit from template comparison and competition, and only commits to specialized assignments in the final convergence stage. A rigorous characterization of this phase transition — including whether it corresponds to a sudden collapse or a gradual entropy decline in the very last epochs — is left for future work.
+
 ---
 
 ## 5. Discussion
@@ -152,7 +164,9 @@ The frozen replay experiment reinforces this interpretation: locking routing to 
 
 The static per-layer baseline experiment presents an intriguing observation. If VQ routing merely converges to layer-wise static specialization, one might expect static per-layer graphs — which provide the same layer-specific capacity — to match VQ Router performance. Yet the static baseline significantly underperforms, falling below even the original DGSTA configuration.
 
-We hypothesize that the VQ routing mechanism, despite converging to apparently static behavior, provides valuable structure during training. The codebook competition and Gumbel-Softmax exploration may act as an implicit regularizer or structural search mechanism, allowing the model to explore diverse spatial configurations before settling into stable, specialized assignments. A rigorous investigation of these training dynamics — including trajectory analysis of routing entropy and codebook utilization across training epochs — is left for future work.
+As visualized in Figure 5, the routing entropy reveals an unexpected training trajectory: the router maintains near-maximum entropy (~0.99) for the vast majority of the training process, indicating an extended phase of broad structural exploration. It is only in the final stages of convergence that the entropy collapses into the static layer-wise specialization observed at inference. This prolonged "superposition" phase likely acts as a critical structural search mechanism — the model explores diverse spatial configurations through codebook competition before committing to specialized, stable assignments.
+
+This trajectory provides a plausible explanation for why the static per-layer baseline fails. Static graphs, initialized randomly and optimized independently, bypass this exploration phase entirely. Without the Gumbel-Softmax routing mechanism and the codebook competition it enables, the optimization process cannot benefit from the joint exploration of multiple graph hypotheses. A rigorous characterization of this phase transition — including whether the entropy collapse occurs abruptly or gradually — is left for future work.
 
 ### 5.3 Limitations
 

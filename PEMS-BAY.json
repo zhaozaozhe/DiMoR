@@ -20,5 +20,10 @@
     "type_ln": "pre",
     "set_loss": "huber",
     "huber_delta": 2,
-    "mode": "average"
+    "mode": "average",
+    "use_deep_trend": true,
+    "use_vq_router": true,
+    "use_delay_conv": true,
+    "use_time_aware_adp": false,
+    "use_balance_loss": false
 }

@@ -60,50 +60,22 @@ The embedded representation passes through $L=6$ encoder layers. Each layer cont
 
 \subsection{VQ Graph Router}
 
-The VQ Router operates within each encoder layer independently. Each layer maintains a codebook of $K=10$ learnable graph templates $\{\mathbf{G}_k \in \mathbb{R}^{N \times N}\}_{k=1}^{K}$. Given the layer input $\mathbf{x} \in \mathbb{R}^{B \times T \times N \times D}$:
+The VQ Router operates within each encoder layer independently. Each layer maintains a codebook of $K=10$ learnable graph templates $\{\mathbf{G}_k \in \mathbb{R}^{N \times N}\}_{k=1}^{K}$. Given the layer input $\mathbf{x} \in \mathbb{R}^{B \times T \times N \times D}$, the router proceeds in three stages:
 
-\noindent\textbf{Step 1: Series Decomposition.} A moving-average kernel separates $\mathbf{x}$ into trend and residual components:
-\begin{equation}
-\mathbf{x}_{trend} = \text{MA}(\mathbf{x}), \quad \mathbf{x}_{res} = \mathbf{x} - \mathbf{x}_{trend}
-\label{eq:decomp}
-\end{equation}
-
-\noindent\textbf{Step 2: Router Input Encoding.} The trend component is projected through a spatial encoder to produce routing logits:
-\begin{equation}
-\mathbf{z} = \text{MLP}_{router}\big(\text{Reduce}(\mathbf{x}_{trend})\big) \in \mathbb{R}^{B \times T \times K}
-\label{eq:logits}
-\end{equation}
-where $\text{Reduce}(\cdot)$ collapses the feature dimension and $\text{MLP}_{router}$ consists of a spatial compressor ($\mathbb{R}^{N} \to \mathbb{R}^{64} \to \mathbb{R}^{32}$) followed by a linear classifier.
-
-\noindent\textbf{Step 3: Discrete Template Selection.} Hard routing via Gumbel-Softmax:
+\noindent\textbf{Decomposition and Routing.} A moving-average kernel separates $\mathbf{x}$ into trend $\mathbf{x}_{trend}$ and residual $\mathbf{x}_{res}$. The trend component is encoded through a spatial MLP to produce routing logits $\mathbf{z} \in \mathbb{R}^{B \times T \times K}$, from which a discrete template selection is obtained via Gumbel-Softmax with hard sampling:
 \begin{equation}
 \mathbf{w}_{b,t} = \text{Gumbel-Softmax}(\mathbf{z}_{b,t}, \tau=1.0, \text{hard=True}) \in \{0,1\}^{K}
 \label{eq:gumbel}
 \end{equation}
-where $\mathbf{w}_{b,t}^{(k)} = 1$ if template $k$ is selected at batch element $b$, time step $t$.
 
-\noindent\textbf{Step 4: Graph Construction.} The selected template forms the dynamic adjacency, while learned node embeddings $\mathbf{U}, \mathbf{V} \in \mathbb{R}^{N \times d_e}$ provide a complementary static graph:
+\noindent\textbf{Graph Construction and Propagation.} The selected template forms $\mathbf{A}_{vq} \in \mathbb{R}^{B \times T \times N \times N}$ via $\mathbf{A}_{vq} = \sum_k \mathbf{w}_{b,t}^{(k)} \mathbf{G}_k$, while learned node embeddings provide a complementary static graph $\mathbf{A}_{adp} = \text{ReLU}(\mathbf{U}\mathbf{V}^\top)$. Both are sparsified (top-20 per row, softmax-normalized) and used as support matrices in a 2-hop GCN operating on $\mathbf{x}_{res}$. The GCN output is fused with the trend component:
 \begin{equation}
-\mathbf{A}_{vq} = \sum_{k=1}^{K} \mathbf{w}_{b,t}^{(k)} \cdot \mathbf{G}_k \in \mathbb{R}^{B \times T \times N \times N}, \quad
-\mathbf{A}_{adp} = \text{ReLU}(\mathbf{U} \mathbf{V}^\top) \in \mathbb{R}^{N \times N}
-\label{eq:graphs}
-\end{equation}
-
-Both matrices undergo a sparsification step: each row is truncated to its top-20 values, temperature-scaled, and re-normalized via softmax.
-
-\noindent\textbf{Step 5: GCN Propagation.} The residual component is processed through a 2-hop graph convolution with support matrices $[\mathbf{A}_{vq}, \mathbf{A}_{adp}]$:
-\begin{equation}
-\mathbf{x}_{gcn} = \sum_{m=0}^{2} \sum_{s \in \{\mathbf{A}_{vq}, \mathbf{A}_{adp}\}} \mathbf{W}_m^{(s)} (\mathbf{s}^m \mathbf{x}_{res})
-\label{eq:gcn}
-\end{equation}
-where $\mathbf{s}^m$ denotes $m$-hop propagation via the support matrix $\mathbf{s}$. The GCN output is fused with the trend component:
-\begin{equation}
-\mathbf{x}_{out} = \text{LayerNorm}\big(\mathbf{x}_{trend} + \tanh(\mathbf{x}_{gcn}) \times \alpha\big)
+\mathbf{x}_{out} = \text{LayerNorm}\big(\mathbf{x}_{trend} + \tanh(\text{GCN}(\mathbf{x}_{res}; \mathbf{A}_{vq}, \mathbf{A}_{adp})) \times \alpha\big)
 \label{eq:fusion}
 \end{equation}
-with $\alpha = 0.1$ as a learnable scale parameter.
+with learnable scale $\alpha$ initialized at 0.1.
 
-\noindent\textbf{Step 6: Consistency Regularization.} To encourage temporally smooth routing, a consistency loss penalizes rapid switching:
+\noindent\textbf{Consistency Regularization.} A temporal smoothness penalty discourages rapid switching:
 \begin{equation}
 \mathcal{L}_{cons} = \frac{1}{B(T-1)K} \sum_{b,t,k} \big(\mathbf{z}_{b,t+1}^{(k)} - \mathbf{z}_{b,t}^{(k)}\big)^2
 \label{eq:cons}
@@ -148,27 +120,33 @@ $-$ DelayConv & 12.176 & 12.622 & 13.348 \\
 
 Removing the VQ Router causes the largest degradation, concentrated at short horizons. DeepTrendNet's contribution is marginal---consistent with the backbone attention mechanism already capturing trend information. DelayConv provides moderate improvements. Multi-seed analysis (3 seeds, Appendix~A) reveals seed-to-seed variance ($\sigma\approx 0.10$ MAE) comparable to the observed ablation deltas. Routing behavior patterns are consistent across all seeds.
 
-\subsection{Routing Behavior: Layer-wise Static Specialization}
+\subsection{Routing Appears Dynamic, but Converges to Static Specialization}
 
-\textbf{Figure~1} shows (a) per-layer template usage distribution and (b) time-conditioned dominant template selection across five periods. Different encoder layers consistently prefer different templates: Layer 0 selects T6, Layer 2 selects T4, and Layers 3--5 all select T0. Only Layer 1 exhibits distributed usage (T2: 38\%, T0: 20\%, T9: 12\%). For 5 of 6 layers, a single template accounts for $>$99\% of all selections. The time-conditioned analysis confirms these preferences are temporally stable---the dominant template remains unchanged across all five periods for all layers except Layer 1.
+\textbf{Figure~1} shows (a) per-layer template usage distribution and (b) time-conditioned dominant template selection across five periods. Different encoder layers consistently prefer different templates: Layer 0 selects T6, Layer 2 selects T4, and Layers 3--5 all select T0. Only Layer 1 exhibits distributed usage (T2: 38\%, T0: 20\%, T9: 12\%). For 5 of 6 layers, a single template accounts for $>$99\% of all selections. The time-conditioned analysis confirms these preferences are temporally stable---the dominant template remains unchanged across all five periods for all layers except Layer 1. This is a counterintuitive finding: the router, explicitly designed for time-varying graph selection, learns depth-dependent specialization instead.
 
-To test whether these real-time routing decisions matter, we lock each layer's routing to its dominant template and re-run inference. \textbf{Figure~2} shows the resulting MAE degradation: $<$0.03 across all horizons, with multi-seed error bars. Together, these findings indicate that VQ routing converges to a layer-wise static structural prior---the routing mechanism, despite being designed for time-varying graph selection, learns depth-dependent specialization rather than temporal adaptation, and its inference-time dynamicity is largely dispensable.
+\subsection{Inference-Time Dynamicity Matters Surprisingly Little}
 
-\subsection{The Central Puzzle: Static Replacement Fails, Yet Training Dynamics Persist}
+To test whether real-time routing decisions are functionally important, we lock each layer's routing to its dominant template and re-run inference. \textbf{Figure~2} shows the resulting MAE degradation: $<$0.03 across all horizons, with multi-seed error bars. The degradation at the 60-minute horizon (@12) is merely $+$0.023, and at 15 minutes (@3) it is $+$0.010---consistently within one standard deviation of zero.
 
-The observation that routing is predominantly static raises a natural question: if the router does not meaningfully switch between templates, why not replace it with simpler per-layer static graphs? We test this by replacing the entire VQ routing pipeline with independently learnable static adjacency matrices---one per encoder layer---eliminating all routing machinery while retaining slightly more parameters.
+This result is surprising given the architectural complexity of the routing mechanism. Yet it aligns with the static template usage observed in Figure~1: if the router rarely switches templates, freezing template assignments should cause minimal disruption. The negligible degradation indicates that inference-time dynamicity is largely dispensable in the converged model.
 
-The static per-layer baseline achieves 12.889 / 13.631 / 14.879 (@3/@6/@12)---significantly worse than both the VQ Router and the original DGSTA baseline. This is noteworthy: if VQ routing merely provides layer-specific static priors, a simpler static mechanism should approach its performance. The observed collapse suggests that the VQ mechanism contributes something during training that independent static parameterization cannot replicate.
+\subsection{Why Does Static Replacement Fail?}
 
-\textbf{Figure~5} offers a potential clue. Tracking routing entropy at 15 sampled checkpoints across training reveals an unexpected trajectory: the router maintains near-maximum entropy ($H_{norm} \approx 0.99$) for over 220 epochs before entering a final convergence phase. This extended high-entropy phase indicates broad structural exploration---the model evaluates diverse graph configurations through codebook competition before committing to specialized assignments. Static graphs, initialized randomly and optimized independently, bypass this exploration entirely. We leave rigorous characterization of this phase transition---including whether entropy collapses abruptly or gradually in the final epochs---for future work.
+The findings above raise a natural question: if the router does not meaningfully switch between templates, why not replace it with simpler per-layer static graphs? We test this by substituting the entire VQ routing pipeline with independently learnable static adjacency matrices---one per encoder layer---eliminating all routing machinery while retaining slightly more parameters.
 
-\subsection{Interpretability Analysis}
+The static per-layer baseline achieves 12.889 / 13.631 / 14.879 (@3/@6/@12)---significantly worse than both the VQ Router (11.894 / 12.406 / 13.228) and the original DGSTA baseline (12.082 / 12.498 / 13.204). This collapse is striking: if VQ routing merely provides layer-specific static priors, a simpler static mechanism should approach its performance. The fact that it does not---indeed, that it underperforms even the routing-free baseline---suggests something nontrivial is contributed by the VQ mechanism.
 
-\textbf{Geographic Characterization.} \textbf{Figure~3} maps the four actively used templates to the PeMS08 sensor network using a topology-preserving layout. Quantitative hop-distance analysis (Appendix~C) confirms: T0 exhibits 100\% local edges (within 3 hops), consistent with neighborhood propagation; T2 shows 61\% long-range edges (beyond 5 hops), consistent with corridor coupling. \textbf{Figure~4} tracks Layer 1 template activation over 24 hours: T2 (long-range corridor coupling) dominates during daytime (59--76\%), while T0 (local propagation) dominates at night (37--57\%). \textbf{Figure~7} provides a micro-geographic zoom confirming these patterns at the individual sensor level.
+\textbf{Figure~5} offers a potential explanation. Tracking routing entropy at 15 sampled checkpoints across training reveals an unexpected trajectory: the router maintains near-maximum entropy ($H_{norm} \approx 0.99$) for over 220 epochs before entering a final convergence phase. In other words, for the vast majority of training, the router evaluates all templates nearly equally---a state of broad structural exploration---and only commits to specialized assignments in the final stage. Static graphs, initialized randomly and optimized independently, bypass this exploration phase entirely. This contrast suggests that the prolonged exploration enabled by codebook competition may be the mechanism through which VQ routing achieves what static parameterization cannot. We emphasize that this interpretation remains a plausible hypothesis; rigorous causal isolation of the training dynamics is left for future work.
 
-\textbf{Structural Disentanglement.} \textbf{Figure~6} presents the Jaccard similarity index of edge overlaps among the four active templates. The near-zero off-diagonal values ($\leq$0.018, mean 0.009) demonstrate that the router extracts highly disjoint, mutually complementary topological priors---not slight variations of a single base graph.
+\subsection{What Spatial Structures Do Templates Actually Encode?}
 
-\textbf{Quantitative Fidelity.} To align with XAI evaluation standards, Table~\ref{tab:xai} reports three interpretability metrics. (1) \emph{Fidelity}: substituting active templates with random graphs of identical sparsity causes MAE degradation of $+$0.44/$+$0.65/$+$0.99---approximately 30--50$\times$ larger than frozen replay degradation ($+$0.01/$+$0.01/$+$0.02). This demonstrates that learned templates encode faithful spatial dependencies that random graphs cannot replicate. (2) \emph{Disentanglement}: the mean off-diagonal Jaccard index of 0.009 indicates mutually exclusive template structures. (3) \emph{Locality}: hop-distance distributions (T0: 100\% $<$3 hops; T2: 61\% $>$5 hops) quantify the receptive-field characteristics.
+The analyses above focus on \emph{how} the router behaves---but not \emph{what} it has learned. We now examine the spatial semantics of the learned templates.
+
+\textbf{Geographic Characterization.} \textbf{Figure~3} maps the four actively used templates to the PeMS08 sensor network using a topology-preserving layout. Quantitative hop-distance analysis (Appendix~C) confirms: T0 exhibits 100\% local edges (within 3 hops), consistent with neighborhood propagation; T2 shows 61\% long-range edges (beyond 5 hops), consistent with corridor coupling. The contrast is not subtle---T0 connects exclusively adjacent sensors, while T2 frequently spans the highway network. \textbf{Figure~4} adds a temporal dimension: Layer 1, the only layer showing routing variation, increases its use of T2 (long-range corridor coupling) to 59--76\% during daytime peaks and shifts to T0 (local propagation) to 37--57\% at night. This shift is consistent with the intuitive transition from long-range commuting to localized nocturnal activity. \textbf{Figure~7} provides micro-geographic confirmation at the individual sensor level.
+
+\textbf{Structural Disentanglement.} \textbf{Figure~6} presents the Jaccard similarity index of edge overlaps among the four active templates. The near-zero off-diagonal values ($\leq$0.018, mean 0.009) demonstrate that the router extracts highly disjoint, mutually complementary topological priors---not slight variations of a single base graph. Each template contributes a structurally distinct edge set.
+
+\textbf{Quantitative Fidelity.} Table~\ref{tab:xai} reports three XAI-aligned interpretability metrics. (1) \emph{Fidelity}: substituting active templates with random graphs of identical sparsity causes MAE degradation of $+$0.44/$+$0.65/$+$0.99---approximately 30--50$\times$ larger than frozen replay degradation. This demonstrates that learned templates are not arbitrary; they encode faithful spatial dependencies. (2) \emph{Disentanglement}: the mean off-diagonal Jaccard index of 0.009 confirms mutually exclusive template structures. (3) \emph{Locality}: hop-distance distributions (T0: 100\% $<$3 hops; T2: 61\% $>$5 hops) quantify the receptive-field characteristics.
 
 \begin{table}[h]
 \centering

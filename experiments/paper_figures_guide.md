@@ -4,7 +4,25 @@
 普通但扎实的交通预测可解释性分析。不宣称革命性发现，不发明理论名词。
 核心信息："DiMoR achieves competitive performance while providing interpretable routing behaviors."
 
-## 最终入选 5 张图
+## 最终入选 4 张图 (Gemini v3 review)
+
+### Figure 1: Layer Specialization + Time Routing (Merged)
+文件: `paper_fig1_merged_specialization.png`  
+Caption: "(a) Template usage distribution across encoder layers. Different layers consistently prefer different templates. (b) Time-conditioned dominant template selection. For 5/6 layers, the dominant template is static across all time periods. Layer 1 shows limited variation between daytime and nighttime preferences. This indicates that VQ routing converges to layer-wise static specialization with weak temporal dynamicity."
+
+### Figure 2: Frozen Replay (Redesigned)
+文件: `paper_fig2_frozen_replay.png`  
+Caption: "Frozen template replay degradation with multi-seed error bars. When each layer's routing is locked to its dominant template, MAE increases by less than 0.03 across all horizons. Error bars show standard deviation over 3 seeds. This suggests that in the converged model, inference-time routing dynamicity plays a limited role."
+
+### Figure 3: Geographic Template Visualization
+文件: `geo_templates.png`  
+Caption: "Learned graph templates mapped to the PeMS08 sensor network (topology-preserving spectral layout). Templates actively used by encoder layers exhibit distinct spatial patterns: T0 shows local propagation (100% edges within 3 hops), T2 shows long-range corridor coupling (61% edges beyond 5 hops). Color intensity reflects edge weight."
+
+### Figure 4: Template Activation Timeline
+文件: `geo_activation_timeline.png`  
+Caption: "Layer 1 template activation over 24 hours. The router increases usage of the long-range template (T2) during AM/PM peak periods, while nighttime routing shifts toward local propagation (T0). This observation is consistent with the intuitive shift in traffic behavior from long-range commuting to localized nocturnal patterns."
+
+## 淘汰的图 (Gemini 建议删除/移 Appendix)
 
 ### Figure 3: Routing Behavior by Layer and Time Period
 文件: `fig2_time_routing.png`

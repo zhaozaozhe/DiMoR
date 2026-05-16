@@ -292,7 +292,8 @@ class STSelfAttention(nn.Module):
     def __init__(
             self, dim, s_attn_size, t_attn_size, geo_num_heads=4, sem_num_heads=2, t_num_heads=2, qkv_bias=False,
             attn_drop=0., proj_drop=0., device=torch.device('cpu'), output_dim=1, num_nodes=170,
-            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True
+            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True,
+            vq_sem_coexist=False, use_sem_attn=True
     ):
         super().__init__()
         assert dim % (geo_num_heads + sem_num_heads + t_num_heads) == 0
@@ -309,6 +310,9 @@ class STSelfAttention(nn.Module):
         self.t_ratio = 1 - self.geo_ratio - self.sem_ratio
         self.output_dim = output_dim
         self.use_vq_router = use_vq_router
+        self.vq_sem_coexist = vq_sem_coexist
+        self.use_sem_attn = use_sem_attn
+        self.has_sem = use_sem_attn and not (use_vq_router and not vq_sem_coexist)
 
         self.geo_q_conv = nn.Conv2d(dim, int(dim * self.geo_ratio), kernel_size=1, bias=qkv_bias)
         self.geo_k_conv = nn.Conv2d(dim, int(dim * self.geo_ratio), kernel_size=1, bias=qkv_bias)
@@ -325,7 +329,8 @@ class STSelfAttention(nn.Module):
         self.t_v_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_attn_drop = nn.Dropout(attn_drop)
 
-        self.proj = nn.Linear(dim, dim)
+        proj_in = dim if self.has_sem else int(dim * (self.geo_ratio + self.t_ratio))
+        self.proj = nn.Linear(proj_in, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
         self.reshape1 = nn.Linear(dim, 32)
@@ -439,19 +444,22 @@ class STSelfAttention(nn.Module):
         geo_attn = self.geo_attn_drop(geo_attn)
         geo_x = (geo_attn @ geo_v).transpose(2, 3).reshape(B, T, N, int(D * self.geo_ratio))
 
-        sem_q = self.sem_q_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
-        sem_k = self.sem_k_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
-        sem_v = self.sem_v_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
-        sem_q = sem_q.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
-        sem_k = sem_k.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
-        sem_v = sem_v.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
-        sem_attn = (sem_q @ sem_k.transpose(-2, -1)) * self.scale
-        if sem_mask is not None:
-            sem_attn.masked_fill_(sem_mask, float('-inf'))
-        sem_attn = sem_attn.softmax(dim=-1)
-        sem_attn = self.sem_attn_drop(sem_attn)
-        sem_x = (sem_attn @ sem_v).transpose(2, 3).reshape(B, T, N, int(D * self.sem_ratio))
-        x = self.proj(torch.cat([t_x, geo_x, sem_x], dim=-1))
+        if self.has_sem:
+            sem_q = self.sem_q_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+            sem_k = self.sem_k_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+            sem_v = self.sem_v_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+            sem_q = sem_q.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
+            sem_k = sem_k.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
+            sem_v = sem_v.reshape(B, T, N, self.sem_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
+            sem_attn = (sem_q @ sem_k.transpose(-2, -1)) * self.scale
+            if sem_mask is not None:
+                sem_attn.masked_fill_(sem_mask, float('-inf'))
+            sem_attn = sem_attn.softmax(dim=-1)
+            sem_attn = self.sem_attn_drop(sem_attn)
+            sem_x = (sem_attn @ sem_v).transpose(2, 3).reshape(B, T, N, int(D * self.sem_ratio))
+            x = self.proj(torch.cat([t_x, geo_x, sem_x], dim=-1))
+        else:
+            x = self.proj(torch.cat([t_x, geo_x], dim=-1))
         x = self.proj_drop(x)
         return x
 
@@ -482,7 +490,8 @@ class STEncoderBlock(nn.Module):
             qkv_bias=True, drop=0., attn_drop=0.,
             drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, device=torch.device('cpu'), type_ln="pre",
             output_dim=1, num_nodes=170,
-            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True
+            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True,
+            vq_sem_coexist=False, use_sem_attn=True
     ):
         super().__init__()
         self.type_ln = type_ln
@@ -492,7 +501,8 @@ class STEncoderBlock(nn.Module):
             t_num_heads=t_num_heads, qkv_bias=qkv_bias,
             attn_drop=attn_drop, proj_drop=drop, device=device, output_dim=output_dim, num_nodes=num_nodes,
             use_vq_router=use_vq_router, use_delay_conv=use_delay_conv, adj_init=adj_init,
-            use_time_aware_adp=use_time_aware_adp
+            use_time_aware_adp=use_time_aware_adp, vq_sem_coexist=vq_sem_coexist,
+            use_sem_attn=use_sem_attn
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -601,6 +611,8 @@ class DGSTA(AbstractTrafficStateModel):
         self.use_balance_loss = config.get('use_balance_loss', False)
         self.lambda_balance = config.get('lambda_balance', 0.001)
         self.consistency_weight = config.get('consistency_weight', 0.1)
+        self.vq_sem_coexist = config.get('vq_sem_coexist', False)
+        self.use_sem_attn = config.get('use_sem_attn', True)
 
         if self.max_epoch * self.num_batches * self.world_size < self.step_size * self.output_window:
             self._logger.warning('Parameter `step_size` is too big with {} epochs and '
@@ -642,6 +654,8 @@ class DGSTA(AbstractTrafficStateModel):
                 output_dim=self.output_dim, num_nodes=self.num_nodes,
                 use_vq_router=self.use_vq_router, use_delay_conv=self.use_delay_conv,
                 use_time_aware_adp=self.use_time_aware_adp,
+                vq_sem_coexist=self.vq_sem_coexist,
+                use_sem_attn=self.use_sem_attn,
                 adj_init=self.adj_mx if self.use_vq_router else None
             ) for i in range(enc_depth)
         ])

@@ -4,7 +4,7 @@
     "output_window": 12,
     "train_rate": 0.6,
     "eval_rate": 0.2,
-    "batch_size": 32,
+    "batch_size": 8,
     "add_time_in_day": true,
     "add_day_in_week": true,
     "step_size": 3908,
@@ -25,5 +25,7 @@
     "use_vq_router": true,
     "use_delay_conv": true,
     "use_time_aware_adp": false,
-    "use_balance_loss": false
+    "use_balance_loss": false,
+    "vq_sem_coexist": false,
+    "use_sem_attn": true
 }

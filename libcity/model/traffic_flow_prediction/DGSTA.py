@@ -273,7 +273,6 @@ class SpatialPatternRouter(nn.Module):
             self.consistency_loss = 0.0
 
         weights = F.gumbel_softmax(logits, tau=self.temperature, hard=True, dim=-1)
-        self.routing_probs = F.softmax(logits / self.temperature, dim=-1)
         adj_vq = torch.einsum('btk, knm -> btnm', weights, self.graph_codebook)
         adj_vq = F.relu(adj_vq)
 
@@ -292,8 +291,7 @@ class STSelfAttention(nn.Module):
     def __init__(
             self, dim, s_attn_size, t_attn_size, geo_num_heads=4, sem_num_heads=2, t_num_heads=2, qkv_bias=False,
             attn_drop=0., proj_drop=0., device=torch.device('cpu'), output_dim=1, num_nodes=170,
-            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True,
-            vq_sem_coexist=False, use_sem_attn=True
+            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True
     ):
         super().__init__()
         assert dim % (geo_num_heads + sem_num_heads + t_num_heads) == 0
@@ -310,27 +308,27 @@ class STSelfAttention(nn.Module):
         self.t_ratio = 1 - self.geo_ratio - self.sem_ratio
         self.output_dim = output_dim
         self.use_vq_router = use_vq_router
-        self.vq_sem_coexist = vq_sem_coexist
-        self.use_sem_attn = use_sem_attn
-        self.has_sem = use_sem_attn and not (use_vq_router and not vq_sem_coexist)
 
         self.geo_q_conv = nn.Conv2d(dim, int(dim * self.geo_ratio), kernel_size=1, bias=qkv_bias)
         self.geo_k_conv = nn.Conv2d(dim, int(dim * self.geo_ratio), kernel_size=1, bias=qkv_bias)
         self.geo_v_conv = nn.Conv2d(dim, int(dim * self.geo_ratio), kernel_size=1, bias=qkv_bias)
         self.geo_attn_drop = nn.Dropout(attn_drop)
 
-        self.sem_q_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
-        self.sem_k_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
-        self.sem_v_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
-        self.sem_attn_drop = nn.Dropout(attn_drop)
+        if not self.use_vq_router:
+            self.sem_q_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
+            self.sem_k_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
+            self.sem_v_conv = nn.Conv2d(dim, int(dim * self.sem_ratio), kernel_size=1, bias=qkv_bias)
+            self.sem_attn_drop = nn.Dropout(attn_drop)
 
         self.t_q_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_k_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_v_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_attn_drop = nn.Dropout(attn_drop)
 
-        proj_in = dim if self.has_sem else int(dim * (self.geo_ratio + self.t_ratio))
-        self.proj = nn.Linear(proj_in, dim)
+        if self.use_vq_router:
+            self.proj = nn.Linear(int(dim * 3 / 4), dim)
+        else:
+            self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
         self.reshape1 = nn.Linear(dim, 32)
@@ -444,7 +442,9 @@ class STSelfAttention(nn.Module):
         geo_attn = self.geo_attn_drop(geo_attn)
         geo_x = (geo_attn @ geo_v).transpose(2, 3).reshape(B, T, N, int(D * self.geo_ratio))
 
-        if self.has_sem:
+        if self.use_vq_router:
+            x = self.proj(torch.cat([t_x, geo_x], dim=-1))
+        else:
             sem_q = self.sem_q_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
             sem_k = self.sem_k_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
             sem_v = self.sem_v_conv(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
@@ -458,8 +458,7 @@ class STSelfAttention(nn.Module):
             sem_attn = self.sem_attn_drop(sem_attn)
             sem_x = (sem_attn @ sem_v).transpose(2, 3).reshape(B, T, N, int(D * self.sem_ratio))
             x = self.proj(torch.cat([t_x, geo_x, sem_x], dim=-1))
-        else:
-            x = self.proj(torch.cat([t_x, geo_x], dim=-1))
+
         x = self.proj_drop(x)
         return x
 
@@ -490,8 +489,7 @@ class STEncoderBlock(nn.Module):
             qkv_bias=True, drop=0., attn_drop=0.,
             drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, device=torch.device('cpu'), type_ln="pre",
             output_dim=1, num_nodes=170,
-            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True,
-            vq_sem_coexist=False, use_sem_attn=True
+            use_vq_router=False, use_delay_conv=False, adj_init=None, use_time_aware_adp=True
     ):
         super().__init__()
         self.type_ln = type_ln
@@ -501,8 +499,7 @@ class STEncoderBlock(nn.Module):
             t_num_heads=t_num_heads, qkv_bias=qkv_bias,
             attn_drop=attn_drop, proj_drop=drop, device=device, output_dim=output_dim, num_nodes=num_nodes,
             use_vq_router=use_vq_router, use_delay_conv=use_delay_conv, adj_init=adj_init,
-            use_time_aware_adp=use_time_aware_adp, vq_sem_coexist=vq_sem_coexist,
-            use_sem_attn=use_sem_attn
+            use_time_aware_adp=use_time_aware_adp
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -608,11 +605,7 @@ class DGSTA(AbstractTrafficStateModel):
         self.use_vq_router = config.get('use_vq_router', False)
         self.use_delay_conv = config.get('use_delay_conv', False)
         self.use_time_aware_adp = config.get('use_time_aware_adp', True)
-        self.use_balance_loss = config.get('use_balance_loss', False)
-        self.lambda_balance = config.get('lambda_balance', 0.001)
         self.consistency_weight = config.get('consistency_weight', 0.1)
-        self.vq_sem_coexist = config.get('vq_sem_coexist', False)
-        self.use_sem_attn = config.get('use_sem_attn', True)
 
         if self.max_epoch * self.num_batches * self.world_size < self.step_size * self.output_window:
             self._logger.warning('Parameter `step_size` is too big with {} epochs and '
@@ -654,8 +647,6 @@ class DGSTA(AbstractTrafficStateModel):
                 output_dim=self.output_dim, num_nodes=self.num_nodes,
                 use_vq_router=self.use_vq_router, use_delay_conv=self.use_delay_conv,
                 use_time_aware_adp=self.use_time_aware_adp,
-                vq_sem_coexist=self.vq_sem_coexist,
-                use_sem_attn=self.use_sem_attn,
                 adj_init=self.adj_mx if self.use_vq_router else None
             ) for i in range(enc_depth)
         ])
@@ -788,42 +779,7 @@ class DGSTA(AbstractTrafficStateModel):
         else:
             pred_loss = lf(y_predicted, y_true)
 
-        total_loss = pred_loss + self.consistency_weight * total_consistency_loss
-
-        if self.use_balance_loss and self.use_vq_router and self.training:
-            all_probs = []
-            for block in self.encoder_blocks:
-                probs = block.st_attn.vq_router.routing_probs  # [B, T, K]
-                all_probs.append(probs)
-            all_probs = torch.cat(all_probs, dim=0)  # [layers*B, T, K]
-            p = all_probs.mean(dim=(0, 1))  # [K] per-template usage distribution
-            L_balance = (p * torch.log(p + 1e-10)).sum()
-            total_loss = total_loss + self.lambda_balance * L_balance
-
-            if batches_seen is not None and batches_seen % 5000 == 0:
-                H_soft = -(p * torch.log(p + 1e-10)).sum()
-                H_soft_norm = H_soft / math.log(p.shape[0])
-
-                # Hard routing stats (from actual Gumbel-softmax hard output)
-                lines = [
-                    f'[Routing] batch {batches_seen}:',
-                    f'  soft H={H_soft_norm.item():.4f} top-3={p.topk(3).indices.tolist()}',
-                ]
-                for layer_idx, block in enumerate(self.encoder_blocks):
-                    hw = block.st_attn.last_router_weights  # [B, T, K] one-hot
-                    hw_flat = hw.reshape(-1, hw.shape[-1])  # [B*T, K]
-                    h_p = hw_flat.mean(dim=0)  # [K] hard usage frequency
-                    H_hard = -(h_p * torch.log(h_p + 1e-10)).sum()
-                    H_hard_norm = H_hard / math.log(h_p.shape[0])
-                    top_ids = h_p.topk(5).indices.tolist()
-                    top_vals = [f'{h_p[i].item():.3f}' for i in top_ids]
-                    lines.append(
-                        f'  L{layer_idx} hard H={H_hard_norm.item():.3f} '
-                        f'top-5={list(zip(top_ids, top_vals))}'
-                    )
-                self._logger.info(''.join(['\n' + l for l in lines]))
-
-        return total_loss
+        return pred_loss + self.consistency_weight * total_consistency_loss
 
     def calculate_loss(self, batch, batches_seen=None, lap_mx=None):
         y_true = batch['y']

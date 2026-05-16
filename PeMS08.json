@@ -27,6 +27,6 @@
     "use_time_aware_adp": false,
     "use_balance_loss": false,
     "lambda_balance": 0.001,
-    "vq_sem_coexist": false,
-    "use_sem_attn": true
+    "use_horizon_weight": true,
+    "use_early_stop": false
 }

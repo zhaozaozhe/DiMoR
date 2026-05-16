@@ -57,7 +57,7 @@ def collect_data(model, loader, lap_mx, device):
     all_codebooks = {}
     with torch.no_grad():
         for batch in loader:
-            batch.to_tensor(device)
+            batch.to_tensor(torch.device('cpu')); batch.to_tensor(device)
             _ = model(batch, lap_mx=lap_mx)
             ind = batch['ind'].cpu().numpy()
             for layer_idx, block in enumerate(model.encoder_blocks):
